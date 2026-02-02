@@ -1,0 +1,22 @@
+# 项目文件忽略列表
+.env
+.env.local
+.env.*.local
+*.pyc
+__pycache__/
+*.egg-info/
+dist/
+build/
+.DS_Store
+.vscode/
+.idea/
+*.log
+*.pid
+.pytest_cache/
+.coverage
+htmlcov/
+venv/
+env/
+node_modules/
+.git/
+.gitignore
