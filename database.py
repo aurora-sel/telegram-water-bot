@@ -88,42 +88,96 @@ class DatabaseManager:
             raise
     
     async def _create_tables(self):
-        """创建数据库表"""
-        schema = """
-        CREATE TABLE IF NOT EXISTS users (
-            user_id BIGINT PRIMARY KEY,
-            daily_goal INTEGER DEFAULT 2500,
-            interval_min INTEGER DEFAULT 60,
-            start_time VARCHAR(5) DEFAULT '08:00',
-            end_time VARCHAR(5) DEFAULT '22:00',
-            timezone INTEGER DEFAULT 8,
-            last_remind_time TIMESTAMP NULL,
-            last_interaction_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            is_disabled INTEGER DEFAULT 0,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-        
-        CREATE TABLE IF NOT EXISTS records (
-            id SERIAL PRIMARY KEY,
-            user_id BIGINT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
-            amount INTEGER NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-        
-        CREATE TABLE IF NOT EXISTS blacklist (
-            user_id BIGINT PRIMARY KEY,
-            reason VARCHAR(255),
-            blocked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-        
-        CREATE INDEX IF NOT EXISTS idx_records_user_id ON records(user_id);
-        CREATE INDEX IF NOT EXISTS idx_records_created_at ON records(created_at);
-        CREATE INDEX IF NOT EXISTS idx_users_last_interaction ON users(last_interaction_time);
-        """
-        
+        """创建数据库表并执行迁移"""
         async with self.pool.acquire() as conn:
-            await conn.execute(schema)
-            print("[DB] 表创建/检查完成")
+            # 1. 创建主表
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS users (
+                    user_id BIGINT PRIMARY KEY,
+                    daily_goal INTEGER DEFAULT 2500,
+                    interval_min INTEGER DEFAULT 60,
+                    start_time VARCHAR(5) DEFAULT '08:00',
+                    end_time VARCHAR(5) DEFAULT '22:00',
+                    timezone INTEGER DEFAULT 8,
+                    last_remind_time TIMESTAMP NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            print("[DB] users 表已就绪")
+            
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS records (
+                    id SERIAL PRIMARY KEY,
+                    user_id BIGINT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+                    amount INTEGER NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            print("[DB] records 表已就绪")
+            
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS blacklist (
+                    user_id BIGINT PRIMARY KEY,
+                    reason VARCHAR(255),
+                    blocked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            print("[DB] blacklist 表已就绪")
+            
+            # 2. 执行迁移：添加缺失的列（v2.0 升级）
+            await self._migrate_schema(conn)
+            
+            # 3. 创建索引
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_records_user_id ON records(user_id)
+            """)
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_records_created_at ON records(created_at)
+            """)
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_users_last_interaction ON users(last_interaction_time)
+            """)
+            print("[DB] 表创建/迁移/索引完成")
+    
+    async def _migrate_schema(self, conn):
+        """数据库架构迁移 - 处理列的添加和修改"""
+        try:
+            # 检查 last_interaction_time 列是否存在
+            result = await conn.fetchval("""
+                SELECT EXISTS (
+                    SELECT 1 FROM information_schema.columns 
+                    WHERE table_name = 'users' AND column_name = 'last_interaction_time'
+                )
+            """)
+            
+            if not result:
+                print("[DB] 迁移: 添加 last_interaction_time 列...")
+                await conn.execute("""
+                    ALTER TABLE users 
+                    ADD COLUMN last_interaction_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                """)
+                print("[DB] ✅ last_interaction_time 列已添加")
+        except Exception as e:
+            print(f"[DB] ⚠️  迁移 last_interaction_time 列失败: {e}")
+        
+        try:
+            # 检查 is_disabled 列是否存在
+            result = await conn.fetchval("""
+                SELECT EXISTS (
+                    SELECT 1 FROM information_schema.columns 
+                    WHERE table_name = 'users' AND column_name = 'is_disabled'
+                )
+            """)
+            
+            if not result:
+                print("[DB] 迁移: 添加 is_disabled 列...")
+                await conn.execute("""
+                    ALTER TABLE users 
+                    ADD COLUMN is_disabled INTEGER DEFAULT 0
+                """)
+                print("[DB] ✅ is_disabled 列已添加")
+        except Exception as e:
+            print(f"[DB] ⚠️  迁移 is_disabled 列失败: {e}")
     
     async def close(self):
         """关闭数据库连接池"""
