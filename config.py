@@ -54,6 +54,10 @@ APP_HOST = "0.0.0.0"  # 监听所有网卡
 # ==================== 管理员配置 ====================
 ADMIN_IDS_STR = os.getenv("ADMIN_IDS", "")  # 格式：123456789,987654321
 ADMIN_IDS = [int(x.strip()) for x in ADMIN_IDS_STR.split(",") if x.strip()] if ADMIN_IDS_STR else []
+if ADMIN_IDS:
+    logger.info(f"[配置] ✅ 管理员 ID 配置成功: {ADMIN_IDS}")
+else:
+    logger.info("[配置] ℹ️  未配置管理员 ID（可选）- 查看 ADMIN_SETUP.md 了解如何配置")
 
 # ==================== 保活配置（防止自动休眠）====================
 UPTIMEROBOT_URL = os.getenv("UPTIMEROBOT_URL")  # UptimeRobot 监控 URL（可选）
