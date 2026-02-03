@@ -4,7 +4,16 @@
 """
 
 import os
+import sys
+import logging
 from dotenv import load_dotenv
+
+# 早期日志配置
+logging.basicConfig(
+    level=logging.INFO,
+    format="[%(asctime)s] %(levelname)s: %(message)s"
+)
+logger = logging.getLogger(__name__)
 
 # 加载 .env 文件
 load_dotenv()
@@ -12,7 +21,11 @@ load_dotenv()
 # ==================== Telegram Bot 配置 ====================
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 if not TELEGRAM_TOKEN:
-    raise ValueError("错误: 环境变量 TELEGRAM_TOKEN 未设置。请在 Koyeb 中配置此环境变量。")
+    logger.error("❌ 错误: 环境变量 TELEGRAM_TOKEN 未设置!")
+    logger.error("💡 解决方案: 在 Koyeb 仪表板中配置以下环境变量:")
+    logger.error("   - TELEGRAM_TOKEN: 从 @BotFather 获取的 Bot Token")
+    logger.error("   - DATABASE_URL: PostgreSQL 数据库连接 URL")
+    sys.exit(1)
 
 # ==================== Webhook 配置 ====================
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
@@ -21,7 +34,18 @@ WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 # ==================== 数据库配置 ====================
 DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
-    raise ValueError("错误: 环境变量 DATABASE_URL 未设置。请在 Koyeb 中配置此环境变量。")
+    logger.error("❌ 错误: 环境变量 DATABASE_URL 未设置!")
+    logger.error("💡 解决方案: 在 Koyeb 仪表板中配置以下环境变量:")
+    logger.error("   - DATABASE_URL: PostgreSQL 数据库连接 URL (格式: postgresql://user:password@host/dbname)")
+    logger.error("   - TELEGRAM_TOKEN: 从 @BotFather 获取的 Bot Token")
+    sys.exit(1)
+
+# 验证 DATABASE_URL 格式
+if not DATABASE_URL.startswith(("postgresql://", "postgresql+asyncpg://")):
+    logger.error("❌ 错误: DATABASE_URL 格式不正确!")
+    logger.error("💡 应该以 'postgresql://' 开头")
+    logger.error(f"   你的 URL: {DATABASE_URL[:50]}...")
+    sys.exit(1)
 
 # ==================== 应用配置 ====================
 APP_PORT = int(os.getenv("PORT", 8080))  # Koyeb 默认使用 8080 端口

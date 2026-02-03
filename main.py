@@ -910,13 +910,27 @@ async def cleanup_inactive_users():
 
 async def on_startup():
     """应用启动事件"""
-    logger.info("[启动] 初始化数据库...")
-    await db.init()
+    try:
+        logger.info("[启动] 初始化数据库...")
+        await db.init()
+        logger.info("[启动] ✅ 数据库初始化成功")
+    except Exception as e:
+        logger.error(f"[启动] ❌ 数据库初始化失败: {e}", exc_info=True)
+        logger.error("[启动] 💡 诊断信息:")
+        logger.error("[启动]   - 检查 DATABASE_URL 环境变量是否正确")
+        logger.error("[启动]   - 检查 PostgreSQL 服务器是否在线")
+        logger.error("[启动]   - 检查数据库是否存在且可访问")
+        raise
     
-    logger.info("[启动] 启动 APScheduler...")
-    if not scheduler.running:
-        scheduler.start()
-    
+    try:
+        logger.info("[启动] 启动 APScheduler...")
+        if not scheduler.running:
+            scheduler.start()
+        logger.info("[启动] ✅ APScheduler 启动成功")
+    except Exception as e:
+        logger.error(f"[启动] ❌ APScheduler 启动失败: {e}", exc_info=True)
+        raise
+
     # 添加定时清理任务（每天 00:00 UTC 执行）
     scheduler.add_job(
         cleanup_inactive_users,
@@ -926,7 +940,7 @@ async def on_startup():
         replace_existing=True,
         misfire_grace_time=300
     )
-    logger.info("[启动] 已注册过期用户清理任务（每日 00:00 UTC 执行）")
+    logger.info("[启动] ✅ 已注册过期用户清理任务（每日 00:00 UTC 执行）")
     
     logger.info("[启动] Telegram 机器人已启动")
     logger.info("[启动] 机器人初始化完成")
@@ -976,15 +990,20 @@ def create_app():
 
 async def run_http_server():
     """运行 HTTP 服务器"""
-    app = create_app()
-    runner = web.AppRunner(app)
-    await runner.setup()
-    
-    site = web.TCPSite(runner, APP_HOST, APP_PORT)
-    await site.start()
-    
-    logger.info(f"[HTTP服务器] 已启动，监听 {APP_HOST}:{APP_PORT}")
-    return runner
+    try:
+        app = create_app()
+        runner = web.AppRunner(app)
+        await runner.setup()
+        
+        site = web.TCPSite(runner, APP_HOST, APP_PORT)
+        await site.start()
+        
+        logger.info(f"[HTTP服务器] ✅ 已启动，监听 {APP_HOST}:{APP_PORT}")
+        return runner
+    except Exception as e:
+        logger.error(f"[HTTP服务器] ❌ 启动失败: {e}", exc_info=True)
+        logger.error(f"[HTTP服务器] 💡 检查端口 {APP_PORT} 是否已被占用")
+        raise
 
 
 async def main():
@@ -993,20 +1012,29 @@ async def main():
     dp.startup.register(on_startup)
     dp.shutdown.register(on_shutdown)
     
-    # 启动 HTTP 服务器
-    http_runner = await run_http_server()
-    
+    http_runner = None
     try:
+        # 启动 HTTP 服务器
+        logger.info("[HTTP服务器] 启动中...")
+        http_runner = await run_http_server()
+        logger.info("[HTTP服务器] ✅ 成功启动")
+        
         # 删除 Webhook（如果存在）并启动长轮询
         await bot.delete_webhook(drop_pending_updates=True)
         logger.info("[轮询] 启动长轮询模式...")
+        logger.info("[启动] 🎉 Telegram Bot 已就绪！开始接收消息...")
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
     except Exception as e:
-        logger.error(f"[错误] 主程序异常: {e}")
+        logger.error(f"[错误] 主程序异常: {e}", exc_info=True)
         raise
     finally:
         # 清理 HTTP 服务器
-        await http_runner.cleanup()
+        if http_runner:
+            try:
+                await http_runner.cleanup()
+                logger.info("[关闭] HTTP 服务器已清理")
+            except Exception as e:
+                logger.warning(f"[关闭] HTTP 服务器清理失败: {e}")
 
 
 if __name__ == "__main__":
@@ -1015,4 +1043,6 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         logger.info("[关闭] 收到中止信号，正在关闭...")
     except Exception as e:
-        logger.error(f"[错误] 应用崩溃: {e}")
+        logger.error(f"[错误] 应用崩溃: {e}", exc_info=True)
+        import traceback
+        traceback.print_exc()

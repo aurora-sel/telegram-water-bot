@@ -164,7 +164,10 @@ python main.py
 - ☁️ **[Koyeb 部署指南](KOYEB_DEPLOY.md)** - 如果可用
 - 🌍 **[所有平台对比](ALTERNATIVE_PLATFORMS.md)** - 详细对比
 
-**部署清单：** 查看 [部署检查清单](DEPLOYMENT_CHECKLIST.md)
+**部署帮助：**
+- 🔧 **[快速修复指南](DEPLOYMENT_QUICK_FIX.md)** - 部署失败? 5 分钟解决！
+- 🆘 **[完整故障排查](DEPLOYMENT_TROUBLESHOOTING.md)** - 详细诊断步骤
+- 📋 **[部署检查清单](DEPLOYMENT_CHECKLIST.md)** - 预防问题
 
 #### 2.1 前置准备
 
@@ -230,6 +233,23 @@ postgresql://user:password@host:5432/water_reminder
 如果机器人响应，则部署成功！
 
 > **详细指南：** 如需更多信息，请参考 [KOYEB_DEPLOY.md](KOYEB_DEPLOY.md)
+
+---
+
+### 🔴 部署遇到错误？
+
+如果看到 `application exited with code 0 instance stopped` 或应用无法启动：
+
+⚡ **快速修复（5 分钟）：**
+1. 查看 **[快速修复指南](DEPLOYMENT_QUICK_FIX.md)** - 最常见的 3 个原因
+2. 检查 Koyeb 环境变量是否正确设置（`TELEGRAM_TOKEN` 和 `DATABASE_URL`）
+3. 点击 "Redeploy" 重新部署
+
+🔧 **完整故障排查：**
+- 详见 **[故障排查指南](DEPLOYMENT_TROUBLESHOOTING.md)**
+- 包含数据库连接测试、日志查看、本地测试方法
+
+---
 
 ## 📱 使用指南
 
