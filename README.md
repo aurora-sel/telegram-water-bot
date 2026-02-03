@@ -24,6 +24,30 @@
 - 根据进度提供个性化鼓励语
 - 达成目标时自动庆祝
 
+### 🆕 用户管理功能（v2.0）
+- **用户数据管理**
+  - `/reset` - 重置自己的所有饮水记录
+  - `/stop_today` - 停止今天的提醒
+  - `/disable_forever` - 永久禁用提醒
+  - `/enable` - 重新启用提醒
+
+### 🆕 管理员功能（v2.0）
+- **管理员权限**
+  - `/admin_stats` - 查看全局统计（用户数、活跃度）
+  - `/blacklist` - 拉黑用户（禁止使用机器人）
+  - `/unblacklist` - 解除拉黑
+  - `/user_info` - 查看用户详细信息和统计
+  
+- **自动清理**
+  - 检测 7 天未交互的用户
+  - 发送警告信息给用户
+  - 24 小时后自动删除未反应用户的所有数据
+
+### 🆕 自动保活（v2.0）
+- 防止云平台（Render）自动休眠
+- 支持 UptimeRobot 集成
+- HTTP 健康检查端点（/health 和 /status）
+
 ## 🛠 技术栈
 
 - **Python 3.10+** - 编程语言
@@ -280,21 +304,84 @@ postgresql://user:password@host:5432/water_reminder
 /help
 ```
 
+### 🆕 用户管理命令（v2.0）
+
+#### 重置自己的数据
+```
+/reset
+```
+删除所有饮水记录，但保留用户设置（目标、间隔等）。
+
+#### 停止今天的提醒
+```
+/stop_today
+```
+停止今天的自动提醒，明天继续正常。
+
+#### 永久禁用提醒
+```
+/disable_forever
+```
+永久停止接收提醒，但可继续手动记录饮水。
+
+#### 重新启用提醒
+```
+/enable
+```
+恢复被禁用的提醒功能。
+
+### 🆕 管理员命令（v2.0）
+
+> **前提条件：** 需在环境变量 `ADMIN_IDS` 中配置你的 Telegram ID
+
+#### 查看全局统计
+```
+/admin_stats
+```
+查看总用户数、活跃用户数、禁用用户数。
+
+#### 拉黑用户
+```
+/blacklist [用户ID] [原因]
+例如: /blacklist 123456789 垃圾广告
+```
+禁止指定用户使用机器人。用户无法执行任何命令，数据保留。
+
+#### 解除拉黑
+```
+/unblacklist [用户ID]
+例如: /unblacklist 123456789
+```
+解除对用户的拉黑，用户恢复正常使用。
+
+#### 查看用户信息
+```
+/user_info [用户ID]
+例如: /user_info 123456789
+```
+查看用户的详细信息，包括：
+- 用户设置（目标、间隔、时区、活跃时段）
+- 提醒和黑名单状态
+- 今日饮水量
+- 账户创建时间和最后交互时间
+
 ## 🗄 数据库架构
 
 ### Users 表
-存储用户的个性化设置
+存储用户的个性化设置和状态
 
 ```sql
 CREATE TABLE users (
-    user_id BIGINT PRIMARY KEY,           -- Telegram 用户 ID
-    daily_goal INTEGER DEFAULT 2500,      -- 每日目标 (ml)
-    interval_min INTEGER DEFAULT 60,      -- 提醒间隔 (分钟)
-    start_time VARCHAR(5) DEFAULT '08:00',-- 活跃开始时间
-    end_time VARCHAR(5) DEFAULT '22:00',  -- 活跃结束时间
-    timezone INTEGER DEFAULT 8,           -- 时区偏移
-    last_remind_time TIMESTAMP NULL,      -- 上次提醒时间 (UTC)
-    created_at TIMESTAMP DEFAULT NOW()    -- 账户创建时间
+    user_id BIGINT PRIMARY KEY,                    -- Telegram 用户 ID
+    daily_goal INTEGER DEFAULT 2500,               -- 每日目标 (ml)
+    interval_min INTEGER DEFAULT 60,               -- 提醒间隔 (分钟)
+    start_time VARCHAR(5) DEFAULT '08:00',         -- 活跃开始时间
+    end_time VARCHAR(5) DEFAULT '22:00',           -- 活跃结束时间
+    timezone INTEGER DEFAULT 8,                    -- 时区偏移
+    last_remind_time TIMESTAMP NULL,               -- 上次提醒时间 (UTC)
+    last_interaction_time TIMESTAMP DEFAULT NOW(), -- 最后交互时间（用于清理检测）
+    is_disabled INTEGER DEFAULT 0,                 -- 提醒禁用状态
+    created_at TIMESTAMP DEFAULT NOW()             -- 账户创建时间
 );
 ```
 
@@ -311,6 +398,17 @@ CREATE TABLE records (
 
 CREATE INDEX idx_records_user_id ON records(user_id);
 CREATE INDEX idx_records_created_at ON records(created_at);
+```
+
+### 🆕 Blacklist 表（v2.0）
+存储被拉黑的用户
+
+```sql
+CREATE TABLE blacklist (
+    user_id BIGINT PRIMARY KEY,           -- 被拉黑的用户 ID
+    reason VARCHAR(255),                  -- 拉黑原因
+    blocked_at TIMESTAMP DEFAULT NOW()    -- 拉黑时间
+);
 ```
 
 ## 🔧 多用户调度机制

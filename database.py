@@ -38,6 +38,8 @@ class User(Base):
     end_time = Column(String(5), default="22:00")  # 活跃时段结束
     timezone = Column(Integer, default=8)  # 时区偏移 (如 +8)
     last_remind_time = Column(DateTime, nullable=True)  # 上一次提醒时间 (UTC)
+    last_interaction_time = Column(DateTime, default=datetime.utcnow)  # 上一次交互时间（用于检测过期用户）
+    is_disabled = Column(Integer, default=0)  # 是否禁用提醒（1 = 禁用，0 = 启用）
     created_at = Column(DateTime, default=datetime.utcnow)  # 账户创建时间
     
     # 关系映射
@@ -96,6 +98,8 @@ class DatabaseManager:
             end_time VARCHAR(5) DEFAULT '22:00',
             timezone INTEGER DEFAULT 8,
             last_remind_time TIMESTAMP NULL,
+            last_interaction_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            is_disabled INTEGER DEFAULT 0,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
         
@@ -106,8 +110,15 @@ class DatabaseManager:
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
         
+        CREATE TABLE IF NOT EXISTS blacklist (
+            user_id BIGINT PRIMARY KEY,
+            reason VARCHAR(255),
+            blocked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        
         CREATE INDEX IF NOT EXISTS idx_records_user_id ON records(user_id);
         CREATE INDEX IF NOT EXISTS idx_records_created_at ON records(created_at);
+        CREATE INDEX IF NOT EXISTS idx_users_last_interaction ON users(last_interaction_time);
         """
         
         async with self.pool.acquire() as conn:
@@ -258,6 +269,95 @@ class DatabaseManager:
         """获取今日总饮水量"""
         records = await self.get_today_records(user_id, timezone)
         return sum(r["amount"] for r in records)
+    
+    # ==================== 用户禁用和删除 ====================
+    
+    async def update_last_interaction(self, user_id: int, interaction_time: Optional[datetime] = None):
+        """更新用户最后交互时间"""
+        interaction_time = interaction_time or datetime.utcnow()
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE users SET last_interaction_time = $1 WHERE user_id = $2",
+                interaction_time,
+                user_id
+            )
+    
+    async def set_user_disabled(self, user_id: int, disabled: bool = True) -> None:
+        """设置用户禁用状态"""
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE users SET is_disabled = $1 WHERE user_id = $2",
+                1 if disabled else 0,
+                user_id
+            )
+    
+    async def is_user_disabled(self, user_id: int) -> bool:
+        """检查用户是否被禁用"""
+        async with self.pool.acquire() as conn:
+            result = await conn.fetchval(
+                "SELECT is_disabled FROM users WHERE user_id = $1",
+                user_id
+            )
+            return bool(result) if result is not None else False
+    
+    async def reset_user_data(self, user_id: int) -> None:
+        """重置用户数据（删除所有记录，但保留用户配置）"""
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                "DELETE FROM records WHERE user_id = $1",
+                user_id
+            )
+    
+    async def delete_user_completely(self, user_id: int) -> None:
+        """完全删除用户及其所有数据"""
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                "DELETE FROM users WHERE user_id = $1",
+                user_id
+            )
+    
+    async def add_to_blacklist(self, user_id: int, reason: str = "") -> None:
+        """将用户加入黑名单"""
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                """INSERT INTO blacklist (user_id, reason) VALUES ($1, $2)
+                   ON CONFLICT (user_id) DO UPDATE SET reason = $2""",
+                user_id,
+                reason
+            )
+    
+    async def remove_from_blacklist(self, user_id: int) -> None:
+        """将用户从黑名单移除"""
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                "DELETE FROM blacklist WHERE user_id = $1",
+                user_id
+            )
+    
+    async def is_in_blacklist(self, user_id: int) -> bool:
+        """检查用户是否在黑名单中"""
+        async with self.pool.acquire() as conn:
+            result = await conn.fetchval(
+                "SELECT 1 FROM blacklist WHERE user_id = $1",
+                user_id
+            )
+            return bool(result)
+    
+    async def get_all_users(self) -> List[Dict[str, Any]]:
+        """获取所有用户（仅管理员使用）"""
+        async with self.pool.acquire() as conn:
+            users = await conn.fetch("SELECT * FROM users ORDER BY user_id")
+            return [dict(u) for u in users]
+    
+    async def get_inactive_users(self, days: int = 7) -> List[Dict[str, Any]]:
+        """获取超过 N 天未交互的用户"""
+        cutoff_time = datetime.utcnow() - timedelta(days=days)
+        async with self.pool.acquire() as conn:
+            users = await conn.fetch(
+                "SELECT * FROM users WHERE last_interaction_time < $1 AND is_disabled = 0",
+                cutoff_time
+            )
+            return [dict(u) for u in users]
 
 
 # ==================== 全局数据库实例 ====================

@@ -20,9 +20,10 @@ from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, ReplyKey
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from aiohttp import web
+import aiohttp
 
 from database import db
-from config import TELEGRAM_TOKEN, APP_HOST, APP_PORT, ENCOURAGEMENT_MESSAGES, COMPLETION_MESSAGES
+from config import TELEGRAM_TOKEN, APP_HOST, APP_PORT, ENCOURAGEMENT_MESSAGES, COMPLETION_MESSAGES, ADMIN_IDS, UPTIMEROBOT_URL
 
 # ==================== 日志配置 ====================
 logging.basicConfig(
@@ -60,6 +61,16 @@ def get_user_local_time(timezone: int) -> datetime:
     return utc_now + timedelta(hours=timezone)
 
 
+def is_admin(user_id: int) -> bool:
+    """检查用户是否为管理员"""
+    return user_id in ADMIN_IDS
+
+
+async def is_user_blacklisted(user_id: int) -> bool:
+    """检查用户是否被加入黑名单"""
+    return await db.is_in_blacklist(user_id)
+
+
 def is_in_active_period(now: datetime, start_time_str: str, end_time_str: str) -> bool:
     """判断当前时间是否在活跃时段内"""
     try:
@@ -85,16 +96,29 @@ def is_in_active_period(now: datetime, start_time_str: str, end_time_str: str) -
 async def create_reminder_job(user_id: int):
     """为用户创建一个独立的提醒 Job"""
     try:
+        # 检查用户是否被黑名单或禁用
+        if await is_user_blacklisted(user_id):
+            logger.info(f"[调度] 用户 {user_id} 在黑名单中，跳过创建 Job")
+            return
+        
         # 获取用户设置
         user = await db.get_or_create_user(user_id)
+        
+        # 检查用户是否禁用提醒
+        if user.get("is_disabled", 0):
+            logger.info(f"[调度] 用户 {user_id} 已禁用提醒，跳过创建 Job")
+            return
         
         interval_min = user["interval_min"]
         timezone = user["timezone"]
         
         # 如果已存在同用户的 Job，先删除
         job_id = f"reminder_{user_id}"
-        if job_id in scheduler.get_jobs():
+        try:
             scheduler.remove_job(job_id)
+        except Exception:
+            # Job 不存在，忽略错误
+            pass
         
         # 创建异步任务函数
         async def send_reminder():
@@ -170,6 +194,14 @@ async def cmd_start(message: Message):
     """处理 /start 命令"""
     user_id = message.from_user.id
     
+    # 更新最后交互时间
+    await db.update_last_interaction(user_id)
+    
+    # 检查黑名单
+    if await is_user_blacklisted(user_id):
+        await message.answer("❌ 您已被管理员禁用，无法使用此机器人。")
+        return
+    
     # 创建或获取用户
     user = await db.get_or_create_user(user_id)
     
@@ -203,6 +235,8 @@ async def cmd_start(message: Message):
 @dp.message(Command("help"))
 async def cmd_help(message: Message):
     """处理 /help 命令"""
+    user_id = message.from_user.id
+    await db.update_last_interaction(user_id)
     help_text = (
         "🤖 <b>机器人命令列表</b>\n\n"
         "<b>📝 记录饮水</b>\n"
@@ -227,6 +261,13 @@ async def cmd_help(message: Message):
 async def cmd_settings(message: Message):
     """查看当前设置"""
     user_id = message.from_user.id
+    await db.update_last_interaction(user_id)
+    
+    # 检查黑名单
+    if await is_user_blacklisted(user_id):
+        await message.answer("❌ 您已被管理员禁用，无法使用此命令。")
+        return
+    
     user = await db.get_or_create_user(user_id)
     
     settings_text = (
@@ -245,6 +286,14 @@ async def cmd_settings(message: Message):
 @dp.message(Command("goal"))
 async def cmd_goal(message: Message, state: FSMContext):
     """设置每日目标"""
+    user_id = message.from_user.id
+    await db.update_last_interaction(user_id)
+    
+    # 检查黑名单
+    if await is_user_blacklisted(user_id):
+        await message.answer("❌ 您已被管理员禁用，无法使用此命令。")
+        return
+    
     args = message.text.split()
     
     if len(args) < 2:
@@ -271,6 +320,14 @@ async def cmd_goal(message: Message, state: FSMContext):
 @dp.message(Command("interval"))
 async def cmd_interval(message: Message):
     """设置提醒间隔"""
+    user_id = message.from_user.id
+    await db.update_last_interaction(user_id)
+    
+    # 检查黑名单
+    if await is_user_blacklisted(user_id):
+        await message.answer("❌ 您已被管理员禁用，无法使用此命令。")
+        return
+    
     args = message.text.split()
     
     if len(args) < 2:
@@ -300,6 +357,14 @@ async def cmd_interval(message: Message):
 @dp.message(Command("timezone"))
 async def cmd_timezone(message: Message):
     """设置时区"""
+    user_id = message.from_user.id
+    await db.update_last_interaction(user_id)
+    
+    # 检查黑名单
+    if await is_user_blacklisted(user_id):
+        await message.answer("❌ 您已被管理员禁用，无法使用此命令。")
+        return
+    
     args = message.text.split()
     
     if len(args) < 2:
@@ -326,6 +391,14 @@ async def cmd_timezone(message: Message):
 @dp.message(Command("time"))
 async def cmd_time(message: Message):
     """设置活跃时段"""
+    user_id = message.from_user.id
+    await db.update_last_interaction(user_id)
+    
+    # 检查黑名单
+    if await is_user_blacklisted(user_id):
+        await message.answer("❌ 您已被管理员禁用，无法使用此命令。")
+        return
+    
     args = message.text.split()
     
     if len(args) < 3:
@@ -355,6 +428,14 @@ async def cmd_time(message: Message):
 @dp.message(Command("back"))
 async def cmd_back(message: Message):
     """补录饮水记录"""
+    user_id = message.from_user.id
+    await db.update_last_interaction(user_id)
+    
+    # 检查黑名单
+    if await is_user_blacklisted(user_id):
+        await message.answer("❌ 您已被管理员禁用，无法使用此功能。")
+        return
+    
     args = message.text.split()
     
     if len(args) < 3:
@@ -411,6 +492,13 @@ async def cmd_back(message: Message):
 async def cmd_stats(message: Message):
     """查看统计数据"""
     user_id = message.from_user.id
+    await db.update_last_interaction(user_id)
+    
+    # 检查黑名单
+    if await is_user_blacklisted(user_id):
+        await message.answer("❌ 您已被管理员禁用，无法使用此命令。")
+        return
+    
     user = await db.get_or_create_user(user_id)
     
     # 获取统计数据
@@ -455,11 +543,285 @@ async def cmd_stats(message: Message):
     logger.info(f"[统计] 用户 {user_id} 查询统计数据")
 
 
+# /reset 命令 - 重置用户数据
+@dp.message(Command("reset"))
+async def cmd_reset(message: Message):
+    """重置自己的所有饮水数据"""
+    user_id = message.from_user.id
+    await db.update_last_interaction(user_id)
+    
+    # 检查黑名单
+    if await is_user_blacklisted(user_id):
+        await message.answer("❌ 您已被管理员禁用，无法使用此命令。")
+        return
+    
+    try:
+        await db.reset_user_data(user_id)
+        await message.answer(
+            "🔄 <b>数据已重置</b>\n\n"
+            "您的所有饮水记录已被删除，账户设置已保留。\n"
+            "提醒将继续运行。",
+            parse_mode="HTML"
+        )
+        logger.info(f"[重置] 用户 {user_id} 重置了自己的数据")
+    except Exception as e:
+        await message.answer(f"❌ 重置失败: {e}")
+
+
+# /stop_today 命令 - 停止今日提醒
+@dp.message(Command("stop_today"))
+async def cmd_stop_today(message: Message):
+    """停止今天的提醒"""
+    user_id = message.from_user.id
+    await db.update_last_interaction(user_id)
+    
+    # 检查黑名单
+    if await is_user_blacklisted(user_id):
+        await message.answer("❌ 您已被管理员禁用，无法使用此命令。")
+        return
+    
+    try:
+        # 移除用户的 Job
+        job_id = f"reminder_{user_id}"
+        try:
+            scheduler.remove_job(job_id)
+        except Exception:
+            pass
+        
+        # 将用户从活跃 Job 字典中移除
+        active_jobs.pop(user_id, None)
+        
+        await message.answer(
+            "🛑 <b>今日提醒已停止</b>\n\n"
+            "使用 /start 重新启动提醒。",
+            parse_mode="HTML"
+        )
+        logger.info(f"[停止] 用户 {user_id} 停止了今日提醒")
+    except Exception as e:
+        await message.answer(f"❌ 操作失败: {e}")
+
+
+# /disable_forever 命令 - 永久禁用提醒
+@dp.message(Command("disable_forever"))
+async def cmd_disable_forever(message: Message):
+    """永久禁用提醒"""
+    user_id = message.from_user.id
+    await db.update_last_interaction(user_id)
+    
+    # 检查黑名单
+    if await is_user_blacklisted(user_id):
+        await message.answer("❌ 您已被管理员禁用，无法使用此命令。")
+        return
+    
+    try:
+        await db.set_user_disabled(user_id, True)
+        
+        # 移除用户的 Job
+        job_id = f"reminder_{user_id}"
+        try:
+            scheduler.remove_job(job_id)
+        except Exception:
+            pass
+        
+        active_jobs.pop(user_id, None)
+        
+        await message.answer(
+            "🚫 <b>提醒已永久禁用</b>\n\n"
+            "您可以继续记录饮水，但不会收到自动提醒。\n"
+            "使用 /enable 重新启用提醒。",
+            parse_mode="HTML"
+        )
+        logger.info(f"[禁用] 用户 {user_id} 永久禁用了提醒")
+    except Exception as e:
+        await message.answer(f"❌ 操作失败: {e}")
+
+
+# /enable 命令 - 启用提醒
+@dp.message(Command("enable"))
+async def cmd_enable(message: Message):
+    """重新启用提醒"""
+    user_id = message.from_user.id
+    await db.update_last_interaction(user_id)
+    
+    # 检查黑名单
+    if await is_user_blacklisted(user_id):
+        await message.answer("❌ 您已被管理员禁用，无法使用此命令。")
+        return
+    
+    try:
+        await db.set_user_disabled(user_id, False)
+        await create_reminder_job(user_id)
+        
+        await message.answer(
+            "✅ <b>提醒已启用</b>\n\n"
+            "您将按照设置的间隔接收提醒。",
+            parse_mode="HTML"
+        )
+        logger.info(f"[启用] 用户 {user_id} 启用了提醒")
+    except Exception as e:
+        await message.answer(f"❌ 操作失败: {e}")
+
+
+# ==================== 管理员命令 ====================
+
+# /admin_stats 命令 - 管理员查看统计
+@dp.message(Command("admin_stats"))
+async def cmd_admin_stats(message: Message):
+    """查看全局统计（仅管理员）"""
+    user_id = message.from_user.id
+    await db.update_last_interaction(user_id)
+    
+    if not is_admin(user_id):
+        await message.answer("❌ 您没有权限执行此命令。")
+        return
+    
+    try:
+        all_users = await db.get_all_users()
+        total_users = len(all_users)
+        disabled_users = sum(1 for u in all_users if u.get("is_disabled", 0))
+        active_users = total_users - disabled_users
+        
+        stats_text = (
+            f"👨‍💼 <b>管理员统计</b>\n\n"
+            f"总用户数: {total_users}\n"
+            f"活跃用户: {active_users}\n"
+            f"禁用用户: {disabled_users}\n"
+        )
+        
+        await message.answer(stats_text, parse_mode="HTML")
+        logger.info(f"[管理] 管理员 {user_id} 查看统计")
+    except Exception as e:
+        await message.answer(f"❌ 查询失败: {e}")
+
+
+# /blacklist 命令 - 管理员拉黑用户
+@dp.message(Command("blacklist"))
+async def cmd_blacklist(message: Message):
+    """拉黑用户（仅管理员）"""
+    user_id = message.from_user.id
+    await db.update_last_interaction(user_id)
+    
+    if not is_admin(user_id):
+        await message.answer("❌ 您没有权限执行此命令。")
+        return
+    
+    args = message.text.split()
+    if len(args) < 2:
+        await message.answer("用法: /blacklist [用户ID] [原因]\n例如: /blacklist 123456789 垃圾用户")
+        return
+    
+    try:
+        target_id = int(args[1])
+        reason = " ".join(args[2:]) if len(args) > 2 else ""
+        
+        await db.add_to_blacklist(target_id, reason)
+        
+        # 删除用户的 Job
+        job_id = f"reminder_{target_id}"
+        try:
+            scheduler.remove_job(job_id)
+        except Exception:
+            pass
+        
+        active_jobs.pop(target_id, None)
+        
+        await message.answer(f"✅ 已拉黑用户 {target_id}")
+        logger.info(f"[管理] 管理员 {user_id} 拉黑了用户 {target_id}，原因: {reason}")
+    except ValueError:
+        await message.answer("❌ 用户 ID 必须是数字")
+    except Exception as e:
+        await message.answer(f"❌ 操作失败: {e}")
+
+
+# /unblacklist 命令 - 管理员解除拉黑
+@dp.message(Command("unblacklist"))
+async def cmd_unblacklist(message: Message):
+    """解除拉黑（仅管理员）"""
+    user_id = message.from_user.id
+    await db.update_last_interaction(user_id)
+    
+    if not is_admin(user_id):
+        await message.answer("❌ 您没有权限执行此命令。")
+        return
+    
+    args = message.text.split()
+    if len(args) < 2:
+        await message.answer("用法: /unblacklist [用户ID]\n例如: /unblacklist 123456789")
+        return
+    
+    try:
+        target_id = int(args[1])
+        await db.remove_from_blacklist(target_id)
+        await message.answer(f"✅ 已解除对用户 {target_id} 的拉黑")
+        logger.info(f"[管理] 管理员 {user_id} 解除了对用户 {target_id} 的拉黑")
+    except ValueError:
+        await message.answer("❌ 用户 ID 必须是数字")
+    except Exception as e:
+        await message.answer(f"❌ 操作失败: {e}")
+
+
+# /user_info 命令 - 管理员查看用户信息
+@dp.message(Command("user_info"))
+async def cmd_user_info(message: Message):
+    """查看用户信息（仅管理员）"""
+    user_id = message.from_user.id
+    await db.update_last_interaction(user_id)
+    
+    if not is_admin(user_id):
+        await message.answer("❌ 您没有权限执行此命令。")
+        return
+    
+    args = message.text.split()
+    if len(args) < 2:
+        await message.answer("用法: /user_info [用户ID]\n例如: /user_info 123456789")
+        return
+    
+    try:
+        target_id = int(args[1])
+        user = await db.get_or_create_user(target_id)
+        
+        # 获取用户统计
+        stats = await db.get_stats(target_id)
+        today_total = stats["today_total"]
+        
+        # 获取用户黑名单状态
+        is_blacklisted = await db.is_in_blacklist(target_id)
+        
+        info_text = (
+            f"👤 <b>用户信息</b>\n\n"
+            f"用户 ID: {user['user_id']}\n"
+            f"每日目标: {user['daily_goal']} ml\n"
+            f"提醒间隔: {user['interval_min']} 分钟\n"
+            f"时区: UTC+{user['timezone']}\n"
+            f"活跃时段: {user['start_time']} ~ {user['end_time']}\n"
+            f"提醒状态: {'🚫 禁用' if user.get('is_disabled') else '✅ 启用'}\n"
+            f"黑名单状态: {'❌ 已拉黑' if is_blacklisted else '✅ 正常'}\n"
+            f"今日饮水: {today_total} ml\n"
+            f"账户创建: {user['created_at'].strftime('%Y-%m-%d %H:%M:%S')}\n"
+            f"最后交互: {user['last_interaction_time'].strftime('%Y-%m-%d %H:%M:%S')}"
+        )
+        
+        await message.answer(info_text, parse_mode="HTML")
+        logger.info(f"[管理] 管理员 {user_id} 查看了用户 {target_id} 的信息")
+    except ValueError:
+        await message.answer("❌ 用户 ID 必须是数字")
+    except Exception as e:
+        await message.answer(f"❌ 查询失败: {e}")
+
+
 # 处理数字输入 - 记录饮水
 @dp.message(F.text.isdigit())
 async def handle_water_input(message: Message):
     """处理数字输入，记录饮水量"""
     user_id = message.from_user.id
+    
+    # 更新最后交互时间
+    await db.update_last_interaction(user_id)
+    
+    # 检查黑名单
+    if await is_user_blacklisted(user_id):
+        await message.answer("❌ 您已被管理员禁用，无法使用此功能。")
+        return
     
     try:
         amount = int(message.text)
@@ -519,6 +881,33 @@ async def handle_unknown(message: Message):
 
 # ==================== 应用启动和关闭 ====================
 
+async def cleanup_inactive_users():
+    """清理超过 7 天未交互的用户"""
+    try:
+        inactive_users = await db.get_inactive_users(days=7)
+        for user_info in inactive_users:
+            user_id = user_info["user_id"]
+            try:
+                # 发送最后提醒信息
+                await bot.send_message(
+                    user_id,
+                    "👋 <b>账户即将清理</b>\n\n"
+                    "由于您超过 7 天未与我们的机器人进行任何交互，"
+                    "您的所有数据（喝水记录）将在 24 小时后被删除。\n\n"
+                    "如需保留数据，请回复任何消息。",
+                    parse_mode="HTML"
+                )
+                # 更新最后交互时间（给用户 24 小时反应时间）
+                await db.update_last_interaction(user_id)
+            except Exception as e:
+                logger.warning(f"[清理] 无法发送消息给用户 {user_id}: {e}")
+                # 用户可能已删除机器人或封禁了，直接删除
+                await db.delete_user_completely(user_id)
+                logger.info(f"[清理] 已删除用户 {user_id} 的所有数据（无法联系）")
+    except Exception as e:
+        logger.error(f"[清理] 清理过期用户任务失败: {e}")
+
+
 async def on_startup():
     """应用启动事件"""
     logger.info("[启动] 初始化数据库...")
@@ -528,10 +917,18 @@ async def on_startup():
     if not scheduler.running:
         scheduler.start()
     
-    logger.info("[启动] Telegram 机器人已启动")
+    # 添加定时清理任务（每天 00:00 UTC 执行）
+    scheduler.add_job(
+        cleanup_inactive_users,
+        trigger=CronTrigger(hour=0, minute=0),
+        id="cleanup_inactive_users",
+        name="清理过期用户",
+        replace_existing=True,
+        misfire_grace_time=300
+    )
+    logger.info("[启动] 已注册过期用户清理任务（每日 00:00 UTC 执行）")
     
-    # 加载所有活跃用户的 Job（可选，用于容器重启后恢复）
-    # 由于内存存储，重启后需要用户重新触发
+    logger.info("[启动] Telegram 机器人已启动")
     logger.info("[启动] 机器人初始化完成")
 
 
