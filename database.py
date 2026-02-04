@@ -324,6 +324,32 @@ class DatabaseManager:
         records = await self.get_today_records(user_id, timezone)
         return sum(r["amount"] for r in records)
     
+    async def get_daily_total(self, user_id: int, days_ago: int = 0, timezone: int = 0) -> int:
+        """
+        获取指定日期的饮水总量
+        days_ago: 0 表示今天，1 表示昨天，2 表示前天，等等
+        """
+        async with self.pool.acquire() as conn:
+            # 计算目标日期的 UTC 开始和结束时间
+            now_utc = datetime.utcnow()
+            user_tz_offset = timedelta(hours=timezone)
+            user_now = now_utc + user_tz_offset
+            
+            target_date = (user_now - timedelta(days=days_ago)).replace(hour=0, minute=0, second=0, microsecond=0)
+            target_start_utc = target_date - user_tz_offset
+            target_end_utc = target_start_utc + timedelta(days=1)
+            
+            result = await conn.fetchval(
+                """SELECT COALESCE(SUM(amount), 0) as total
+                   FROM records
+                   WHERE user_id = $1 AND created_at >= $2 AND created_at < $3""",
+                user_id,
+                target_start_utc,
+                target_end_utc
+            )
+            
+            return int(result) if result else 0
+    
     # ==================== 用户禁用和删除 ====================
     
     async def update_last_interaction(self, user_id: int, interaction_time: Optional[datetime] = None):

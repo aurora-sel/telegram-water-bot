@@ -10,6 +10,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import Optional
 import re
+import random
 
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command, StateFilter
@@ -186,6 +187,164 @@ async def reset_reminder_job(user_id: int):
     await create_reminder_job(user_id)
 
 
+async def create_daily_start_notification(user_id: int):
+    """为用户创建每日开始通知 Job（在用户设置的开始时间发送）"""
+    try:
+        # 检查用户是否被黑名单或禁用
+        if await is_user_blacklisted(user_id):
+            return
+        
+        # 获取用户设置
+        user = await db.get_or_create_user(user_id)
+        
+        if user.get("is_disabled", 0):
+            return
+        
+        start_time = user["start_time"]  # HH:MM 格式
+        start_h, start_m = map(int, start_time.split(":"))
+        
+        # 如果已存在同用户的开始通知 Job，先删除
+        job_id = f"daily_start_{user_id}"
+        try:
+            scheduler.remove_job(job_id)
+        except Exception:
+            pass
+        
+        # 创建每日开始通知任务
+        async def send_start_notification():
+            try:
+                user_data = await db.get_or_create_user(user_id)
+                
+                # 随机选择鼓励语
+                encouragement = random.choice(ENCOURAGEMENT_MESSAGES)
+                
+                message_text = (
+                    f"🌅 <b>新的一天开始了！</b>\n\n"
+                    f"📊 <b>今日目标</b>: {user_data['daily_goal']}ml\n\n"
+                    f"💪 {encouragement}\n\n"
+                    f"<i>直接发送数字（如 200）记录饮水量</i>"
+                )
+                
+                await bot.send_message(
+                    user_id,
+                    message_text,
+                    parse_mode="HTML"
+                )
+                
+                logger.info(f"[每日通知] 已发送每日开始通知给用户 {user_id}")
+                
+            except Exception as e:
+                logger.error(f"[每日通知] 发送每日开始通知给用户 {user_id} 失败: {e}")
+        
+        # 注册每日任务（每天在指定时间执行一次）
+        scheduler.add_job(
+            send_start_notification,
+            trigger=CronTrigger(hour=start_h, minute=start_m),
+            id=job_id,
+            name=f"每日开始通知_用户{user_id}",
+            replace_existing=True,
+            misfire_grace_time=30
+        )
+        
+        logger.info(f"[调度] 为用户 {user_id} 创建每日开始通知 Job (时间 {start_time})")
+        
+    except Exception as e:
+        logger.error(f"[调度] 创建每日开始通知失败 (用户 {user_id}): {e}")
+
+
+async def create_daily_end_report(user_id: int):
+    """为用户创建每日结束报告 Job（在用户设置的结束时间发送）"""
+    try:
+        # 检查用户是否被黑名单或禁用
+        if await is_user_blacklisted(user_id):
+            return
+        
+        # 获取用户设置
+        user = await db.get_or_create_user(user_id)
+        
+        if user.get("is_disabled", 0):
+            return
+        
+        end_time = user["end_time"]  # HH:MM 格式
+        end_h, end_m = map(int, end_time.split(":"))
+        timezone = user["timezone"]
+        
+        # 如果已存在同用户的结束报告 Job，先删除
+        job_id = f"daily_end_{user_id}"
+        try:
+            scheduler.remove_job(job_id)
+        except Exception:
+            pass
+        
+        # 创建每日结束报告任务
+        async def send_end_report():
+            try:
+                user_data = await db.get_or_create_user(user_id)
+                tz = user_data["timezone"]
+                
+                # 获取今日和昨日的饮水总量
+                today_total = await db.get_daily_total(user_id, days_ago=0, timezone=tz)
+                yesterday_total = await db.get_daily_total(user_id, days_ago=1, timezone=tz)
+                daily_goal = user_data["daily_goal"]
+                
+                # 计算进度
+                progress_percent = int((today_total / daily_goal) * 100) if daily_goal > 0 else 0
+                goal_status = "✅ 已达成" if today_total >= daily_goal else "❌ 未达成"
+                
+                # 与昨日的对比
+                diff = today_total - yesterday_total
+                if diff > 0:
+                    comparison = f"📈 比昨天多喝了 {diff}ml，继续保持！"
+                    comparison_emoji = "🎉"
+                elif diff < 0:
+                    comparison = f"📉 比昨天少喝了 {abs(diff)}ml，明天继续加油！"
+                    comparison_emoji = "💪"
+                else:
+                    comparison = f"➡️ 与昨天持平，保持稳定！"
+                    comparison_emoji = "👍"
+                
+                # 随机选择完成语
+                completion_msg = random.choice(COMPLETION_MESSAGES)
+                
+                message_text = (
+                    f"📋 <b>今日喝水报告</b>\n\n"
+                    f"🎯 目标: {daily_goal}ml\n"
+                    f"💧 实际: {today_total}ml\n"
+                    f"📊 完成度: {progress_percent}%\n"
+                    f"状态: {goal_status}\n\n"
+                    f"{comparison_emoji} <b>与昨日对比</b>\n"
+                    f"{comparison}\n"
+                    f"（昨日: {yesterday_total}ml）\n\n"
+                    f"🌙 {completion_msg}"
+                )
+                
+                await bot.send_message(
+                    user_id,
+                    message_text,
+                    parse_mode="HTML"
+                )
+                
+                logger.info(f"[每日报告] 已发送每日结束报告给用户 {user_id}")
+                
+            except Exception as e:
+                logger.error(f"[每日报告] 发送每日结束报告给用户 {user_id} 失败: {e}")
+        
+        # 注册每日任务（每天在指定时间执行一次）
+        scheduler.add_job(
+            send_end_report,
+            trigger=CronTrigger(hour=end_h, minute=end_m),
+            id=job_id,
+            name=f"每日结束报告_用户{user_id}",
+            replace_existing=True,
+            misfire_grace_time=30
+        )
+        
+        logger.info(f"[调度] 为用户 {user_id} 创建每日结束报告 Job (时间 {end_time})")
+        
+    except Exception as e:
+        logger.error(f"[调度] 创建每日结束报告失败 (用户 {user_id}): {e}")
+
+
 # ==================== 消息处理器 ====================
 
 # /start 命令
@@ -205,9 +364,11 @@ async def cmd_start(message: Message):
     # 创建或获取用户
     user = await db.get_or_create_user(user_id)
     
-    # 为新用户创建提醒 Job
+    # 为新用户创建提醒 Job 和每日通知
     if user_id not in active_jobs:
         await create_reminder_job(user_id)
+        await create_daily_start_notification(user_id)
+        await create_daily_end_report(user_id)
     
     # 构建欢迎消息
     welcome_text = (
@@ -416,6 +577,10 @@ async def cmd_time(message: Message):
         
         user_id = message.from_user.id
         await db.update_user_settings(user_id, start_time=start_time, end_time=end_time)
+        
+        # 重新创建每日通知任务（时间已更改）
+        await create_daily_start_notification(user_id)
+        await create_daily_end_report(user_id)
         
         await message.answer(f"✅ 已设置活跃时段为 {start_time} ~ {end_time}")
         logger.info(f"[设置] 用户 {user_id} 设置活跃时段为 {start_time} ~ {end_time}")
@@ -686,6 +851,8 @@ async def cmd_enable(message: Message):
     try:
         await db.set_user_disabled(user_id, False)
         await create_reminder_job(user_id)
+        await create_daily_start_notification(user_id)
+        await create_daily_end_report(user_id)
         
         await message.answer(
             "✅ <b>提醒已启用</b>\n\n"
