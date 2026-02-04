@@ -182,10 +182,22 @@ async def create_reminder_job(user_id: int):
         logger.error(f"[调度] 创建 Job 失败 (用户 {user_id}): {e}")
 
 
-async def reset_reminder_job(user_id: int):
-    """重置用户的提醒 Job（用户记录饮水后调用）"""
+async def reset_reminder_job(user_id: int, remind_time: Optional[datetime] = None):
+    """重置用户的提醒 Job（用户记录饮水后调用）
+    
+    Args:
+        user_id: 用户 ID
+        remind_time: 饮水时间（用于计算下次提醒时间）
+                    如果为 None，则使用当前时间
+    """
     logger.info(f"[调度] 重置用户 {user_id} 的提醒 Job")
+    
+    # 如果提供了饮水时间，更新 last_remind_time
+    if remind_time:
+        await db.update_last_remind_time(user_id, remind_time)
+    
     await create_reminder_job(user_id)
+
 
 
 async def create_daily_start_notification(user_id: int):
@@ -634,8 +646,8 @@ async def cmd_back(message: Message):
         daily_goal = user["daily_goal"]
         progress_percent = int((today_total / daily_goal) * 100) if daily_goal > 0 else 0
         
-        # 重置提醒 Job
-        await reset_reminder_job(user_id)
+        # 重置提醒 Job（使用实际的饮水时间而不是当前时间）
+        await reset_reminder_job(user_id, record_time)
         
         # 构建反馈消息
         feedback_text = (
@@ -1072,16 +1084,19 @@ async def handle_water_input(message: Message):
         # 获取用户设置
         user = await db.get_or_create_user(user_id)
         
-        # 添加记录
+        # 添加记录（使用当前时间）
         await db.add_record(user_id, amount)
+        
+        # 获取最后的饮水时间（用于重置提醒计时）
+        last_water_time = await db.get_last_record_time(user_id)
         
         # 获取今日进度
         today_total = await db.get_today_total(user_id, user["timezone"])
         daily_goal = user["daily_goal"]
         progress_percent = int((today_total / daily_goal) * 100) if daily_goal > 0 else 0
         
-        # 重置提醒 Job
-        await reset_reminder_job(user_id)
+        # 重置提醒 Job（使用最后的饮水时间）
+        await reset_reminder_job(user_id, last_water_time)
         
         # 构建反馈消息
         feedback_text = (

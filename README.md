@@ -1,6 +1,8 @@
 # 🤖 Telegram 喝水提醒机器人
 
-> 🔧 **最新修复** (2026-02-04)：定时提醒功能已修复，现已按设定间隔正确发送。详见 [REMINDER_FIX_REPORT.md](REMINDER_FIX_REPORT.md)
+> 🔧 **最新修复** (2026-02-04)：
+> - 定时提醒功能已修复，现已按设定间隔正确发送 [REMINDER_FIX_REPORT.md](REMINDER_FIX_REPORT.md)
+> - 补录数据的提醒计时已精准修复，基于实际饮水时间 [REMINDER_TIMING_FIX.md](REMINDER_TIMING_FIX.md)
 
 一个功能完整的 Telegram Bot，用于追踪个人饮水并提供定时提醒。支持多用户并发使用，每个用户拥有独立的调度系统和数据隔离。
 
