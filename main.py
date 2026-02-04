@@ -20,6 +20,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 from aiohttp import web
 import aiohttp
 
@@ -167,7 +168,7 @@ async def create_reminder_job(user_id: int):
         # 注册定时任务（每 interval_min 分钟执行一次）
         scheduler.add_job(
             send_reminder,
-            trigger=CronTrigger(minute=f"*/{interval_min if interval_min >= 1 else 1}"),
+            trigger=IntervalTrigger(minutes=interval_min if interval_min >= 1 else 1),
             id=job_id,
             name=f"提醒_用户{user_id}",
             replace_existing=True,
