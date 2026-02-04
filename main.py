@@ -571,7 +571,7 @@ async def cmd_reset(message: Message):
 # /stop_today 命令 - 停止今日提醒
 @dp.message(Command("stop_today"))
 async def cmd_stop_today(message: Message):
-    """停止今天的提醒"""
+    """停止今天的提醒，明天自动恢复"""
     user_id = message.from_user.id
     await db.update_last_interaction(user_id)
     
@@ -591,14 +591,49 @@ async def cmd_stop_today(message: Message):
         # 将用户从活跃 Job 字典中移除
         active_jobs.pop(user_id, None)
         
+        # 计算明天的恢复时间（明天的开始时间）
+        user = await db.get_user(user_id)
+        if user:
+            start_h, start_m = map(int, user['start_time'].split(":"))
+            now = datetime.utcnow()
+            user_tz = user['timezone']
+            user_now = now + timedelta(hours=user_tz)
+            
+            # 计算明天开始时间
+            tomorrow_start = (user_now + timedelta(days=1)).replace(hour=start_h, minute=start_m, second=0, microsecond=0)
+            # 转换回 UTC
+            tomorrow_start_utc = tomorrow_start - timedelta(hours=user_tz)
+            
+            # 创建恢复任务（明天开始时间自动恢复）
+            async def resume_reminder():
+                await create_reminder_job(user_id)
+                logger.info(f"[自动恢复] 用户 {user_id} 的提醒在明天已自动恢复")
+            
+            resume_job_id = f"resume_reminder_{user_id}"
+            try:
+                scheduler.remove_job(resume_job_id)
+            except Exception:
+                pass
+            
+            scheduler.add_job(
+                resume_reminder,
+                trigger=CronTrigger(year=tomorrow_start_utc.year, month=tomorrow_start_utc.month, 
+                                   day=tomorrow_start_utc.day, hour=tomorrow_start_utc.hour, 
+                                   minute=tomorrow_start_utc.minute),
+                id=resume_job_id,
+                replace_existing=True
+            )
+        
         await message.answer(
             "🛑 <b>今日提醒已停止</b>\n\n"
-            "使用 /start 重新启动提醒。",
+            "✨ 明天开始时间将自动恢复提醒\n"
+            "或者使用 /start 立即重新启动。",
             parse_mode="HTML"
         )
-        logger.info(f"[停止] 用户 {user_id} 停止了今日提醒")
+        logger.info(f"[停止] 用户 {user_id} 停止了今日提醒，已安排明日自动恢复")
     except Exception as e:
         await message.answer(f"❌ 操作失败: {e}")
+        logger.error(f"[错误] /stop_today 失败 (用户 {user_id}): {e}")
 
 
 # /disable_forever 命令 - 永久禁用提醒
@@ -761,6 +796,38 @@ async def cmd_unblacklist(message: Message):
 
 
 # /user_info 命令 - 管理员查看用户信息
+# /admin_help 命令 - 显示所有管理员命令
+@dp.message(Command("admin_help"))
+async def cmd_admin_help(message: Message):
+    """显示所有管理员命令"""
+    user_id = message.from_user.id
+    await db.update_last_interaction(user_id)
+    
+    if not is_admin(user_id):
+        await message.answer("❌ 您没有权限执行此命令。")
+        return
+    
+    help_text = (
+        "🔑 <b>管理员命令列表</b>\n\n"
+        "📊 <b>/admin_stats</b>\n"
+        "查看全局统计数据\n\n"
+        "🚫 <b>/blacklist</b> [用户ID] [原因(可选)]\n"
+        "禁用用户账号\n"
+        "例如: /blacklist 123456789 垃圾消息\n\n"
+        "✅ <b>/unblacklist</b> [用户ID]\n"
+        "取消禁用用户账号\n"
+        "例如: /unblacklist 123456789\n\n"
+        "👤 <b>/user_info</b> [用户ID]\n"
+        "查看特定用户的详细信息\n"
+        "例如: /user_info 123456789\n\n"
+        "🔑 <b>/admin_help</b>\n"
+        "显示此帮助信息"
+    )
+    
+    await message.answer(help_text, parse_mode="HTML")
+    logger.info(f"[管理员] 用户 {user_id} 查看了管理员命令")
+
+
 @dp.message(Command("user_info"))
 async def cmd_user_info(message: Message):
     """查看用户信息（仅管理员）"""
