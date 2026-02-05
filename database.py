@@ -535,4 +535,4 @@ class DatabaseManager:
             return True
 
 # 全局数据库实例
-db = Database()
+db = DatabaseManager()
