@@ -17,7 +17,7 @@ from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove, BotCommand, BotCommandScopeDefault, BotCommandScopeAllAdministrators
+from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove, BotCommand, BotCommandScopeDefault, BotCommandScopeAllChatAdministrators
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
@@ -1782,7 +1782,7 @@ async def on_startup():
         # 为管理员设置命令
         await bot.set_my_commands(
             admin_commands,
-            scope=BotCommandScopeAllAdministrators()
+            scope=BotCommandScopeAllChatAdministrators()
         )
         
         logger.info("[启动] ✅ 机器人命令菜单已设置（普通用户和管理员菜单分离）")
