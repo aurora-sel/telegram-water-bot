@@ -63,6 +63,20 @@ def get_user_local_time(timezone: int) -> datetime:
     return utc_now + timedelta(hours=timezone)
 
 
+def format_time_with_timezone(dt: datetime, timezone: int, format_str: str = '%Y-%m-%d %H:%M:%S') -> str:
+    """将UTC时间转换为用户时区并格式化显示"""
+    user_local_time = dt + timedelta(hours=timezone)
+    tz_str = f"UTC+{timezone}" if timezone >= 0 else f"UTC{timezone}"
+    return f"{user_local_time.strftime(format_str)} ({tz_str})"
+
+
+def format_time_only_with_timezone(dt: datetime, timezone: int, format_str: str = '%H:%M:%S') -> str:
+    """只显示时间（不显示日期）并加上时区标注"""
+    user_local_time = dt + timedelta(hours=timezone)
+    tz_str = f"UTC+{timezone}" if timezone >= 0 else f"UTC{timezone}"
+    return f"{user_local_time.strftime(format_str)} ({tz_str})"
+
+
 def is_admin(user_id: int) -> bool:
     """检查用户是否为管理员"""
     return user_id in ADMIN_IDS
@@ -451,7 +465,7 @@ async def cmd_start(message: Message):
         f"📊 <b>您的当前设置</b>\n"
         f"目标: {user['daily_goal']}ml/天\n"
         f"提醒间隔: {user['interval_min']}分钟\n"
-        f"时区: UTC+{user['timezone']}\n"
+        f"时区: {format_time_with_timezone(datetime.utcnow(), user['timezone'], '')}\n"
         f"活跃时段: {user['start_time']} ~ {user['end_time']}"
     )
     
@@ -518,9 +532,9 @@ async def cmd_settings(message: Message):
         "⚙️ <b>您的当前设置</b>\n\n"
         f"🎯 每日目标: {user['daily_goal']} ml\n"
         f"⏱️ 提醒间隔: {user['interval_min']} 分钟\n"
-        f"🌍 时区: UTC+{user['timezone']}\n"
+        f"🌍 时区: {format_time_with_timezone(datetime.utcnow(), user['timezone'], '')}\n"
         f"⏰ 活跃时段: {user['start_time']} ~ {user['end_time']}\n"
-        f"📅 账户创建: {user['created_at'].strftime('%Y-%m-%d %H:%M:%S')}"
+        f"📅 账户创建: {format_time_with_timezone(user['created_at'], user['timezone'])}"
     )
     
     await message.answer(settings_text, parse_mode="HTML")
@@ -1128,23 +1142,21 @@ async def cmd_user_info(message: Message):
             f"用户 ID: {user['user_id']}\n"
             f"每日目标: {user['daily_goal']} ml\n"
             f"提醒间隔: {user['interval_min']} 分钟\n"
-            f"时区: UTC+{user['timezone']}\n"
+            f"时区: {format_time_with_timezone(datetime.utcnow(), user['timezone'], '')}\n"
             f"活跃时段: {user['start_time']} ~ {user['end_time']}\n"
             f"提醒状态: {'🚫 禁用' if user.get('is_disabled') else '✅ 启用'}\n"
             f"黑名单状态: {'❌ 已拉黑' if is_blacklisted else '✅ 正常'}\n"
             f"今日饮水: {today_total} ml\n"
-            f"账户创建: {user['created_at'].strftime('%Y-%m-%d %H:%M:%S')}\n"
-            f"最后交互: {user['last_interaction_time'].strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+            f"账户创建: {format_time_with_timezone(user['created_at'], user['timezone'])}\n"
+            f"最后交互: {format_time_with_timezone(user['last_interaction_time'], user['timezone'])}\n\n"
             f"<b>📋 今日饮水记录</b>\n"
         )
         
         if today_records:
             for record in today_records:
                 created_at = record['created_at']
-                # 转换为用户时区
-                user_local_time = created_at + timedelta(hours=user["timezone"])
                 amount = record['amount']
-                time_str = user_local_time.strftime('%H:%M:%S')
+                time_str = format_time_only_with_timezone(created_at, user["timezone"])
                 info_text += f"• {time_str} - {amount} ml\n"
         else:
             info_text += "• 暂无记录\n"
