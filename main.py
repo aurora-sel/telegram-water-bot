@@ -147,8 +147,8 @@ async def create_reminder_job(user_id: int):
                 if last_remind_time:
                     not_drinking_minutes = (now_utc - last_remind_time).total_seconds() / 60
                     gradient = int(not_drinking_minutes / interval_min)
-                    # 超过4倍的话，保持在4（使用最后的文案）
-                    gradient = min(gradient, 4)
+                    # 确保梯度至少为1，最多为4
+                    gradient = max(1, min(gradient, 4))
                 else:
                     gradient = 1  # 首次提醒
                 
