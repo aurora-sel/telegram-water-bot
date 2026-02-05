@@ -17,7 +17,7 @@ from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
+from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove, BotCommand
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
@@ -1368,8 +1368,43 @@ async def on_startup():
     )
     logger.info("[启动] ✅ 已注册过期用户清理任务（每日 00:00 UTC 执行）")
     
+    # 设置机器人命令菜单
+    try:
+        commands = [
+            # 记录饮水
+            BotCommand(command="start", description="开始使用机器人"),
+            BotCommand(command="help", description="查看所有可用命令"),
+            
+            # 个性化配置
+            BotCommand(command="goal", description="设置每日饮水目标"),
+            BotCommand(command="interval", description="设置提醒间隔"),
+            BotCommand(command="timezone", description="设置时区"),
+            BotCommand(command="time", description="设置活跃时段"),
+            
+            # 数据查询
+            BotCommand(command="stats", description="查看饮水进度和统计"),
+            BotCommand(command="settings", description="查看当前设置"),
+            
+            # 提醒管理
+            BotCommand(command="stop_today", description="停止今天的提醒"),
+            BotCommand(command="disable_forever", description="永久禁用提醒"),
+            BotCommand(command="enable", description="重新启用提醒"),
+            
+            # 数据管理
+            BotCommand(command="reset", description="重置所有饮水记录"),
+            BotCommand(command="back", description="补录之前的饮水"),
+            
+            # 管理员
+            BotCommand(command="admin_help", description="管理员专用命令"),
+        ]
+        await bot.set_my_commands(commands)
+        logger.info("[启动] ✅ 机器人命令菜单已设置")
+    except Exception as e:
+        logger.warning(f"[启动] ⚠️ 设置命令菜单失败: {e}")
+    
     logger.info("[启动] Telegram 机器人已启动")
     logger.info("[启动] 机器人初始化完成")
+
 
 
 async def on_shutdown():
