@@ -73,83 +73,97 @@ class DatabaseManager:
             # 创建 asyncpg 连接池
             # asyncpg 需要使用 postgresql:// 格式
             dsn = DATABASE_URL if DATABASE_URL.startswith("postgresql://") else f"postgresql://{DATABASE_URL}"
+            print(f"[DB] 正在连接数据库: {dsn[:50]}...")
             self.pool = await asyncpg.create_pool(
                 dsn,
                 min_size=5,
                 max_size=20,
                 command_timeout=60
             )
-            print("[DB] 数据库连接池初始化成功")
+            print("[DB] ✅ 数据库连接池初始化成功")
             
             # 建表
             await self._create_tables()
+            print("[DB] ✅ 所有表初始化完成")
         except Exception as e:
-            print(f"[DB] 初始化失败: {e}")
+            print(f"[DB] ❌ 初始化失败: {e}")
+            print(f"[DB] 错误类型: {type(e).__name__}")
+            import traceback
+            traceback.print_exc()
             raise
     
     async def _create_tables(self):
         """创建数据库表并执行迁移"""
-        async with self.pool.acquire() as conn:
-            # 1. 创建主表
-            await conn.execute("""
-                CREATE TABLE IF NOT EXISTS users (
-                    user_id BIGINT PRIMARY KEY,
-                    daily_goal INTEGER DEFAULT 2500,
-                    interval_min INTEGER DEFAULT 60,
-                    start_time VARCHAR(5) DEFAULT '08:00',
-                    end_time VARCHAR(5) DEFAULT '22:00',
-                    timezone INTEGER DEFAULT 8,
-                    last_remind_time TIMESTAMP NULL,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-            print("[DB] users 表已就绪")
-            
-            await conn.execute("""
-                CREATE TABLE IF NOT EXISTS records (
-                    id SERIAL PRIMARY KEY,
-                    user_id BIGINT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
-                    amount INTEGER NOT NULL,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-            print("[DB] records 表已就绪")
-            
-            await conn.execute("""
-                CREATE TABLE IF NOT EXISTS blacklist (
-                    user_id BIGINT PRIMARY KEY,
-                    reason VARCHAR(255),
-                    blocked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-            print("[DB] blacklist 表已就绪")
-            
-            await conn.execute("""
-                CREATE TABLE IF NOT EXISTS reminder_messages (
-                    user_id BIGINT PRIMARY KEY,
-                    gradient_1 VARCHAR(255),
-                    gradient_2 VARCHAR(255),
-                    gradient_3 VARCHAR(255),
-                    gradient_4 VARCHAR(255),
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-            print("[DB] reminder_messages 表已就绪")
-            
-            # 2. 执行迁移：添加缺失的列（v2.0 升级）
-            await self._migrate_schema(conn)
-            
-            # 3. 创建索引
-            await conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_records_user_id ON records(user_id)
-            """)
-            await conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_records_created_at ON records(created_at)
-            """)
-            await conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_users_last_interaction ON users(last_interaction_time)
-            """)
-            print("[DB] 表创建/迁移/索引完成")
+        try:
+            async with self.pool.acquire() as conn:
+                # 1. 创建主表
+                await conn.execute("""
+                    CREATE TABLE IF NOT EXISTS users (
+                        user_id BIGINT PRIMARY KEY,
+                        daily_goal INTEGER DEFAULT 2500,
+                        interval_min INTEGER DEFAULT 60,
+                        start_time VARCHAR(5) DEFAULT '08:00',
+                        end_time VARCHAR(5) DEFAULT '22:00',
+                        timezone INTEGER DEFAULT 8,
+                        last_remind_time TIMESTAMP NULL,
+                        last_interaction_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        is_disabled INTEGER DEFAULT 0,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+                print("[DB] users 表已就绪")
+                
+                await conn.execute("""
+                    CREATE TABLE IF NOT EXISTS records (
+                        id SERIAL PRIMARY KEY,
+                        user_id BIGINT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+                        amount INTEGER NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+                print("[DB] records 表已就绪")
+                
+                await conn.execute("""
+                    CREATE TABLE IF NOT EXISTS blacklist (
+                        user_id BIGINT PRIMARY KEY,
+                        reason VARCHAR(255),
+                        blocked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+                print("[DB] blacklist 表已就绪")
+                
+                await conn.execute("""
+                    CREATE TABLE IF NOT EXISTS reminder_messages (
+                        user_id BIGINT PRIMARY KEY,
+                        gradient_1 VARCHAR(255),
+                        gradient_2 VARCHAR(255),
+                        gradient_3 VARCHAR(255),
+                        gradient_4 VARCHAR(255),
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+                print("[DB] reminder_messages 表已就绪")
+                
+                # 2. 执行迁移：添加缺失的列（v2.0 升级）
+                await self._migrate_schema(conn)
+                
+                # 3. 创建索引
+                await conn.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_records_user_id ON records(user_id)
+                """)
+                await conn.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_records_created_at ON records(created_at)
+                """)
+                await conn.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_users_last_interaction ON users(last_interaction_time)
+                """)
+                print("[DB] 表创建/迁移/索引完成")
+        except Exception as e:
+            print(f"[DB] ❌ 表创建失败: {e}")
+            print(f"[DB] 错误类型: {type(e).__name__}")
+            import traceback
+            traceback.print_exc()
+            raise
     
     async def _migrate_schema(self, conn):
         """数据库架构迁移 - 处理列的添加和修改"""

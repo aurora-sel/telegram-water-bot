@@ -1,9 +1,5 @@
 # 🤖 Telegram 喝水提醒机器人
 
-> 🆕 **最新更新** (2026-02-05)：
-> - 梯度提醒文案现已支持管理员自定义！默认每次提醒为统一文案，管理员可通过 `/set_reminder_messages` 自定义各梯度文案
-> - 新增梯度提醒功能：根据未喝水时长自动调整提醒力度（后续可定制）
-
 一个功能完整的 Telegram Bot，用于追踪个人饮水并提供定时提醒。支持多用户并发使用，每个用户拥有独立的调度系统和数据隔离。
 
 ## ✨ 核心特性
@@ -189,21 +185,10 @@ python main.py
 
 | 平台 | 难度 | 免费 | 推荐 |
 |------|------|------|------|
-| **Render** ⭐ | ⭐⭐ | ✅ 完全免费 | 最推荐 |
-| **Railway** | ⭐⭐ | $5 试用 | 次推荐 |
-| **Koyeb** | ⭐⭐ | ✅ 完全免费 | 如可用 |
-| **PythonAnywhere** | ⭐⭐⭐ | ✅ 有限 | Python 专用 |
+| **Koyeb** | ⭐⭐ | ✅ 完全免费 | 推荐 |
 
-**快速导航：**
-- 🏆 **[Render 部署指南](RENDER_DEPLOYMENT.md)** ⭐ 最简单，完全免费
-- 🚂 **[Railway 部署指南](RAILWAY_DEPLOYMENT.md)** - 按量付费，$5 试用
-- ☁️ **[Koyeb 部署指南](KOYEB_DEPLOY.md)** - 如果可用
-- 🌍 **[所有平台对比](ALTERNATIVE_PLATFORMS.md)** - 详细对比
-
-**部署帮助：**
-- 🔧 **[快速修复指南](DEPLOYMENT_QUICK_FIX.md)** - 部署失败? 5 分钟解决！
-- 🆘 **[完整故障排查](DEPLOYMENT_TROUBLESHOOTING.md)** - 详细诊断步骤
-- 📋 **[部署检查清单](DEPLOYMENT_CHECKLIST.md)** - 预防问题
+**部署指南：**
+- ☁️ **[Koyeb 部署指南](KOYEB_DEPLOY.md)** - 完整的部署步骤
 
 #### 2.1 前置准备
 
