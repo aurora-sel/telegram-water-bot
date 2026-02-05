@@ -188,7 +188,7 @@ python main.py
 | **Koyeb** | ⭐⭐ | ✅ 完全免费 | 推荐 |
 
 **部署指南：**
-- ☁️ **[Koyeb 部署指南](KOYEB_DEPLOY.md)** - 完整的部署步骤
+- ☁️ **[Koyeb 部署指南](KOYEB_DEPLOYMENT.md)** - 完整的部署步骤
 
 #### 2.1 前置准备
 

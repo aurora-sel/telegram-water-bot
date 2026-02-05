@@ -1328,9 +1328,9 @@ async def on_startup():
     except Exception as e:
         logger.error(f"[启动] ❌ 数据库初始化失败: {e}", exc_info=True)
         logger.error("[启动] 💡 诊断信息:")
-        logger.error("[启动]   - 检查 DATABASE_URL 环境变量是否正确")
-        logger.error("[启动]   - 检查 PostgreSQL 服务器是否在线")
-        logger.error("[启动]   - 检查数据库是否存在且可访问")
+        logger.error("[启动]   1. 检查 DATABASE_URL 环境变量是否正确")
+        logger.error("[启动]   2. 检查 PostgreSQL 服务器是否在线")
+        logger.error("[启动]   3. 检查数据库连接字符串格式: postgresql://user:password@host:port/dbname")
         raise
     
     try:
@@ -1453,6 +1453,12 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         logger.info("[关闭] 收到中止信号，正在关闭...")
+    except Exception as e:
+        logger.critical(f"[启动失败] 应用无法启动: {e}")
+        logger.critical(f"[启动失败] 错误类型: {type(e).__name__}")
+        import traceback
+        logger.critical(f"[启动失败] 完整堆栈:\n{traceback.format_exc()}")
+        exit(1)
     except Exception as e:
         logger.error(f"[错误] 应用崩溃: {e}", exc_info=True)
         import traceback

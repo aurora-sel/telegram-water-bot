@@ -70,10 +70,21 @@ class DatabaseManager:
     async def init(self):
         """初始化数据库连接池"""
         try:
+            # 验证 DATABASE_URL 环境变量
+            if not DATABASE_URL or DATABASE_URL == "postgresql://user:password@localhost/water_reminder":
+                print("[DB] ❌ DATABASE_URL 未正确配置！")
+                print("[DB] 当前值: (未设置或使用默认值)")
+                print("[DB] 请设置环境变量: DATABASE_URL=postgresql://username:password@host:port/dbname")
+                raise ValueError("DATABASE_URL 环境变量未设置或格式不正确")
+            
             # 创建 asyncpg 连接池
             # asyncpg 需要使用 postgresql:// 格式
             dsn = DATABASE_URL if DATABASE_URL.startswith("postgresql://") else f"postgresql://{DATABASE_URL}"
-            print(f"[DB] 正在连接数据库: {dsn[:50]}...")
+            
+            # 隐藏密码后显示连接字符串
+            safe_dsn = dsn.split("@")[1] if "@" in dsn else "unknown"
+            print(f"[DB] 正在连接数据库: postgresql://***@{safe_dsn}")
+            
             self.pool = await asyncpg.create_pool(
                 dsn,
                 min_size=5,
@@ -168,6 +179,18 @@ class DatabaseManager:
     async def _migrate_schema(self, conn):
         """数据库架构迁移 - 处理列的添加和修改"""
         try:
+            # 首先检查 users 表是否存在
+            table_exists = await conn.fetchval("""
+                SELECT EXISTS (
+                    SELECT 1 FROM information_schema.tables 
+                    WHERE table_name = 'users'
+                )
+            """)
+            
+            if not table_exists:
+                print("[DB] users 表不存在，跳过迁移")
+                return
+            
             # 检查 last_interaction_time 列是否存在
             result = await conn.fetchval("""
                 SELECT EXISTS (
