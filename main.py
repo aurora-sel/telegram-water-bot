@@ -25,7 +25,7 @@ from aiohttp import web
 import aiohttp
 
 from database import db
-from config import TELEGRAM_TOKEN, APP_HOST, APP_PORT, ENCOURAGEMENT_MESSAGES, COMPLETION_MESSAGES, ADMIN_IDS, UPTIMEROBOT_URL, GRADIENT_REMINDER_MESSAGES
+from config import TELEGRAM_TOKEN, APP_HOST, APP_PORT, ENCOURAGEMENT_MESSAGES, COMPLETION_MESSAGES, ADMIN_IDS, UPTIMEROBOT_URL, DEFAULT_REMINDER_MESSAGE, DEFAULT_GRADIENT_REMINDER_MESSAGES
 
 # ==================== 日志配置 ====================
 logging.basicConfig(
@@ -152,8 +152,13 @@ async def create_reminder_job(user_id: int):
                 else:
                     gradient = 1  # 首次提醒
                 
+                # 获取提醒文案（从数据库查询自定义配置，如果没有则使用默认配置）
+                reminder_messages = await db.get_reminder_messages(user_id)
+                if not reminder_messages:
+                    reminder_messages = DEFAULT_GRADIENT_REMINDER_MESSAGES
+                
                 # 选择对应梯度的提醒文案
-                reminder_text = GRADIENT_REMINDER_MESSAGES.get(gradient, GRADIENT_REMINDER_MESSAGES[4])
+                reminder_text = reminder_messages.get(gradient, reminder_messages.get(4, DEFAULT_REMINDER_MESSAGE))
                 
                 # 获取今日进度
                 today_total = await db.get_today_total(user_id, user_data["timezone"])
@@ -1039,7 +1044,13 @@ async def cmd_admin_help(message: Message):
         "👤 <b>/user_info</b> [用户ID]\n"
         "查看特定用户的详细信息\n"
         "例如: /user_info 123456789\n\n"
-        "🔑 <b>/admin_help</b>\n"
+        "� <b>/set_reminder_messages</b>\n"
+        "自定义梯度提醒文案\n"
+        "支持梯度 1-4，每个梯度对应不同的未喝水时长\n"
+        "输入 /set_reminder_messages 开始交互式配置\n\n"
+        "🔄 <b>/reset_reminder_messages</b>\n"
+        "重置所有梯度提醒文案为默认配置\n\n"
+        "�🔑 <b>/admin_help</b>\n"
         "显示此帮助信息"
     )
     
@@ -1093,6 +1104,117 @@ async def cmd_user_info(message: Message):
         await message.answer("❌ 用户 ID 必须是数字")
     except Exception as e:
         await message.answer(f"❌ 查询失败: {e}")
+
+
+@dp.message(Command("set_reminder_messages"))
+async def cmd_set_reminder_messages(message: Message, state: FSMContext):
+    """设置梯度提醒文案（仅管理员）"""
+    user_id = message.from_user.id
+    await db.update_last_interaction(user_id)
+    
+    if not is_admin(user_id):
+        await message.answer("❌ 您没有权限执行此命令。")
+        return
+    
+    # 显示当前配置和设置说明
+    current_messages = await db.get_reminder_messages(user_id)
+    if not current_messages:
+        current_messages = DEFAULT_GRADIENT_REMINDER_MESSAGES
+    
+    config_text = (
+        "💬 <b>梯度提醒文案配置</b>\n\n"
+        "当前配置：\n"
+        f"梯度 1 (X 分钟未喝水): <code>{current_messages[1]}</code>\n"
+        f"梯度 2 (2X 分钟未喝水): <code>{current_messages[2]}</code>\n"
+        f"梯度 3 (3X 分钟未喝水): <code>{current_messages[3]}</code>\n"
+        f"梯度 4+ (4X+ 分钟未喝水): <code>{current_messages[4]}</code>\n\n"
+        "<b>修改说明：</b>\n"
+        "📝 请按以下格式发送修改指令：\n"
+        "<code>/update_msg 梯度 新文案</code>\n\n"
+        "例如修改梯度 1：\n"
+        "<code>/update_msg 1 💧 是时候喝水啦！</code>\n\n"
+        "例如重置为默认：\n"
+        "<code>/reset_reminder_messages</code>"
+    )
+    
+    await message.answer(config_text, parse_mode="HTML")
+    logger.info(f"[提醒配置] 管理员 {user_id} 打开了提醒文案配置界面")
+
+
+@dp.message(Command("update_msg"))
+async def cmd_update_msg(message: Message):
+    """更新单个梯度的提醒文案（仅管理员）"""
+    user_id = message.from_user.id
+    await db.update_last_interaction(user_id)
+    
+    if not is_admin(user_id):
+        await message.answer("❌ 您没有权限执行此命令。")
+        return
+    
+    # 解析参数
+    parts = message.text.split(" ", 2)
+    if len(parts) < 3:
+        await message.answer(
+            "用法: /update_msg [梯度] [新文案]\n"
+            "梯度: 1-4\n"
+            "例如: /update_msg 1 💧 是时候喝水啦！"
+        )
+        return
+    
+    try:
+        gradient = int(parts[1])
+        new_msg = parts[2]
+        
+        if gradient < 1 or gradient > 4:
+            await message.answer("❌ 梯度必须是 1-4 之间的数字")
+            return
+        
+        # 获取当前配置
+        current_messages = await db.get_reminder_messages(user_id)
+        if not current_messages:
+            current_messages = DEFAULT_GRADIENT_REMINDER_MESSAGES.copy()
+        else:
+            current_messages = dict(current_messages)
+        
+        # 更新指定梯度
+        current_messages[gradient] = new_msg
+        
+        # 保存到数据库
+        await db.set_reminder_messages(user_id, current_messages)
+        
+        await message.answer(
+            f"✅ 梯度 {gradient} 的提醒文案已更新：\n"
+            f"<code>{new_msg}</code>",
+            parse_mode="HTML"
+        )
+        logger.info(f"[提醒配置] 管理员 {user_id} 更新了梯度 {gradient} 的文案")
+        
+    except ValueError:
+        await message.answer("❌ 梯度必须是数字 (1-4)")
+
+
+@dp.message(Command("reset_reminder_messages"))
+async def cmd_reset_reminder_messages(message: Message):
+    """重置梯度提醒文案为默认配置（仅管理员）"""
+    user_id = message.from_user.id
+    await db.update_last_interaction(user_id)
+    
+    if not is_admin(user_id):
+        await message.answer("❌ 您没有权限执行此命令。")
+        return
+    
+    await db.reset_reminder_messages(user_id)
+    
+    default_text = (
+        "✅ 所有梯度提醒文案已重置为默认配置：\n\n"
+        f"梯度 1: <code>{DEFAULT_GRADIENT_REMINDER_MESSAGES[1]}</code>\n"
+        f"梯度 2: <code>{DEFAULT_GRADIENT_REMINDER_MESSAGES[2]}</code>\n"
+        f"梯度 3: <code>{DEFAULT_GRADIENT_REMINDER_MESSAGES[3]}</code>\n"
+        f"梯度 4: <code>{DEFAULT_GRADIENT_REMINDER_MESSAGES[4]}</code>"
+    )
+    
+    await message.answer(default_text, parse_mode="HTML")
+    logger.info(f"[提醒配置] 管理员 {user_id} 重置了梯度提醒文案")
 
 
 # 处理数字输入 - 记录饮水

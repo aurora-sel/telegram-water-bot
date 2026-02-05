@@ -1,8 +1,8 @@
 # 🤖 Telegram 喝水提醒机器人
 
-> 🔧 **最新修复** (2026-02-04)：
-> - 定时提醒功能已修复，现已按设定间隔正确发送 [REMINDER_FIX_REPORT.md](REMINDER_FIX_REPORT.md)
-> - 补录数据的提醒计时已精准修复，基于实际饮水时间 [REMINDER_TIMING_FIX.md](REMINDER_TIMING_FIX.md)
+> 🆕 **最新更新** (2026-02-05)：
+> - 梯度提醒文案现已支持管理员自定义！默认每次提醒为统一文案，管理员可通过 `/set_reminder_messages` 自定义各梯度文案
+> - 新增梯度提醒功能：根据未喝水时长自动调整提醒力度（后续可定制）
 
 一个功能完整的 Telegram Bot，用于追踪个人饮水并提供定时提醒。支持多用户并发使用，每个用户拥有独立的调度系统和数据隔离。
 
@@ -28,6 +28,20 @@
 - 根据进度提供个性化鼓励语
 - 达成目标时自动庆祝
 
+### 🆕 梯度提醒功能（v2.3）
+- **智能提醒力度调整**
+  - 根据用户未喝水的时长，自动提升提醒强度
+  - 梯度 1: X 分钟未喝水（标准提醒）
+  - 梯度 2: 2X 分钟未喝水（增强提醒）
+  - 梯度 3: 3X 分钟未喝水（高级提醒）
+  - 梯度 4+: 4X+ 分钟未喝水（紧急提醒）
+
+- **管理员自定义**
+  - 管理员可自定义各梯度的提醒文案
+  - 默认每次提醒为统一文案："💧 是时候喝水了！"
+  - 可通过命令修改特定梯度的文案
+  - 可一键重置为默认配置
+
 ### 🆕 每日通知功能（v2.1）
 - **每日开始通知** 🌅
   - 在用户设置的开始时间发送
@@ -40,8 +54,6 @@
   - 与昨日数据对比分析
   - 鼓励用户保持或进步
 
-  **详细说明：** 📖 查看 [DAILY_NOTIFICATIONS.md](DAILY_NOTIFICATIONS.md)
-
 ### 🆕 用户管理功能（v2.0）
 - **用户数据管理**
   - `/reset` - 重置自己的所有饮水记录
@@ -51,11 +63,14 @@
 
 ### 🆕 管理员功能（v2.0）
 - **管理员权限**（需在环境变量中配置 ADMIN_IDS）
-  - `/admin_help` - 🆕 显示所有管理员命令
+  - `/admin_help` - 显示所有管理员命令
   - `/admin_stats` - 查看全局统计（用户数、活跃度）
   - `/blacklist` - 拉黑用户（禁止使用机器人）
   - `/unblacklist` - 解除拉黑
   - `/user_info` - 查看用户详细信息和统计
+  - `/set_reminder_messages` - 自定义梯度提醒文案（🆕 v2.3）
+  - `/update_msg` - 更新单个梯度的提醒文案（🆕 v2.3）
+  - `/reset_reminder_messages` - 重置提醒文案为默认（🆕 v2.3）
   
   **快速开始：** 📖 查看 [ADMIN_SETUP.md](ADMIN_SETUP.md) 了解如何配置管理员
   
@@ -406,6 +421,58 @@ postgresql://user:password@host:5432/water_reminder
 - 今日饮水量
 - 账户创建时间和最后交互时间
 
+#### 🆕 自定义梯度提醒文案（v2.3）
+
+管理员可自定义不同"未喝水时长"梯度下的提醒文案。默认所有梯度都为统一文案："💧 是时候喝水了！"
+
+**启动配置向导**
+```
+/set_reminder_messages
+```
+显示当前配置和修改指引。
+
+**修改单个梯度的文案**
+```
+/update_msg [梯度] [新文案]
+例如: /update_msg 1 💧 是时候喝水啦！
+例如: /update_msg 3 👀 眼睛都要干掉了！再不喝水就完蛋了！
+```
+
+**梯度说明** (假设提醒间隔为 60 分钟)：
+| 梯度 | 触发条件 | 用途 |
+|------|--------|------|
+| 1 | 60 分钟未喝水 | 标准提醒 |
+| 2 | 120 分钟未喝水 | 增强提醒，用户开始忘记 |
+| 3 | 180 分钟未喝水 | 高级提醒，用户可能忙碌 |
+| 4+ | 240+ 分钟未喝水 | 紧急提醒，需要强调 |
+
+**重置为默认配置**
+```
+/reset_reminder_messages
+```
+将所有梯度文案重置为默认值。
+
+**完整示例**
+```
+# 设置梯度 1: 温和提醒
+/update_msg 1 💧 该喝水了呢～
+
+# 设置梯度 2: 中等提醒  
+/update_msg 2 🌊 这么久没喝水呀？喝一口吧～
+
+# 设置梯度 3: 加强提醒
+/update_msg 3 😰 眼睛要干掉了！快喝水！
+
+# 设置梯度 4: 紧急提醒
+/update_msg 4 🚨 妹妹都干掉了！！立即喝水！
+
+# 查看配置
+/set_reminder_messages
+
+# 全部恢复默认
+/reset_reminder_messages
+```
+
 ## 🗄 数据库架构
 
 ### Users 表
@@ -449,6 +516,20 @@ CREATE TABLE blacklist (
     user_id BIGINT PRIMARY KEY,           -- 被拉黑的用户 ID
     reason VARCHAR(255),                  -- 拉黑原因
     blocked_at TIMESTAMP DEFAULT NOW()    -- 拉黑时间
+);
+```
+
+### 🆕 Reminder Messages 表（v2.3）
+存储管理员自定义的梯度提醒文案
+
+```sql
+CREATE TABLE reminder_messages (
+    user_id BIGINT PRIMARY KEY,           -- 管理员用户 ID
+    gradient_1 VARCHAR(255),              -- 梯度 1 的提醒文案
+    gradient_2 VARCHAR(255),              -- 梯度 2 的提醒文案
+    gradient_3 VARCHAR(255),              -- 梯度 3 的提醒文案
+    gradient_4 VARCHAR(255),              -- 梯度 4 的提醒文案
+    updated_at TIMESTAMP DEFAULT NOW()    -- 最后更新时间
 );
 ```
 

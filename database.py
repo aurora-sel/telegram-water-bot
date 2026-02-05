@@ -124,6 +124,18 @@ class DatabaseManager:
             """)
             print("[DB] blacklist 表已就绪")
             
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS reminder_messages (
+                    user_id BIGINT PRIMARY KEY,
+                    gradient_1 VARCHAR(255),
+                    gradient_2 VARCHAR(255),
+                    gradient_3 VARCHAR(255),
+                    gradient_4 VARCHAR(255),
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            print("[DB] reminder_messages 表已就绪")
+            
             # 2. 执行迁移：添加缺失的列（v2.0 升级）
             await self._migrate_schema(conn)
             
@@ -438,8 +450,49 @@ class DatabaseManager:
                 cutoff_time
             )
             return [dict(u) for u in users]
-
-
-# ==================== 全局数据库实例 ====================
-
-db = DatabaseManager()
+    
+    async def get_reminder_messages(self, user_id: int) -> Optional[Dict[int, str]]:
+        """获取用户自定义的梯度提醒文案"""
+        async with self.pool.acquire() as conn:
+            result = await conn.fetchrow(
+                "SELECT gradient_1, gradient_2, gradient_3, gradient_4 FROM reminder_messages WHERE user_id = $1",
+                user_id
+            )
+            if result:
+                return {
+                    1: result['gradient_1'],
+                    2: result['gradient_2'],
+                    3: result['gradient_3'],
+                    4: result['gradient_4']
+                }
+            return None
+    
+    async def set_reminder_messages(self, user_id: int, messages: Dict[int, str]) -> bool:
+        """设置用户自定义的梯度提醒文案"""
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO reminder_messages (user_id, gradient_1, gradient_2, gradient_3, gradient_4, updated_at)
+                VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)
+                ON CONFLICT (user_id) DO UPDATE SET
+                    gradient_1 = $2,
+                    gradient_2 = $3,
+                    gradient_3 = $4,
+                    gradient_4 = $5,
+                    updated_at = CURRENT_TIMESTAMP
+            """,
+            user_id,
+            messages.get(1, ""),
+            messages.get(2, ""),
+            messages.get(3, ""),
+            messages.get(4, "")
+            )
+            return True
+    
+    async def reset_reminder_messages(self, user_id: int) -> bool:
+        """重置用户的梯度提醒文案为默认配置"""
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                "DELETE FROM reminder_messages WHERE user_id = $1",
+                user_id
+            )
+            return True

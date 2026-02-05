@@ -106,12 +106,14 @@ COMPLETION_MESSAGES = [
     "⭐ 太棒了！保持这个好习惯！"
 ]
 
-# 梯度提醒文案（根据未喝水时长的倍数）
-GRADIENT_REMINDER_MESSAGES = {
+# 梯度提醒文案（默认：每次提醒都为统一文案，管理员可自定义）
+# 管理员可通过 /set_reminder_messages 命令修改这些文案
+DEFAULT_REMINDER_MESSAGE = "💧 是时候喝水了！"
+DEFAULT_GRADIENT_REMINDER_MESSAGES = {
     1: "💧 是时候喝水了！",
-    2: "💧 是时候喝水了！这么久没喝水你不口渴吗？",
-    3: "💧 是时候喝水了！眼睛都要干掉了！",
-    4: "💧 是时候喝水了！妹妹都干掉了！！"
+    2: "💧 是时候喝水了！",
+    3: "💧 是时候喝水了！",
+    4: "💧 是时候喝水了！"
 }
 
 # API 端点
