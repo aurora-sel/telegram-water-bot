@@ -25,7 +25,7 @@ from aiohttp import web
 import aiohttp
 
 from database import db
-from config import TELEGRAM_TOKEN, APP_HOST, APP_PORT, ENCOURAGEMENT_MESSAGES, COMPLETION_MESSAGES, ADMIN_IDS, UPTIMEROBOT_URL
+from config import TELEGRAM_TOKEN, APP_HOST, APP_PORT, ENCOURAGEMENT_MESSAGES, COMPLETION_MESSAGES, ADMIN_IDS, UPTIMEROBOT_URL, GRADIENT_REMINDER_MESSAGES
 
 # ==================== 日志配置 ====================
 logging.basicConfig(
@@ -124,7 +124,7 @@ async def create_reminder_job(user_id: int):
         
         # 创建异步任务函数
         async def send_reminder():
-            """发送提醒给用户"""
+            """发送提醒给用户（支持梯度提醒文案）"""
             try:
                 user_data = await db.get_or_create_user(user_id)
                 user_local_time = get_user_local_time(user_data["timezone"])
@@ -138,6 +138,23 @@ async def create_reminder_job(user_id: int):
                     logger.info(f"[提醒] 用户 {user_id} 不在活跃时段，跳过提醒")
                     return
                 
+                # 计算未喝水时间（基于上次提醒时间）
+                last_remind_time = user_data.get("last_remind_time")
+                interval_min = user_data["interval_min"]
+                now_utc = datetime.utcnow()
+                
+                # 确定梯度（未喝水时间是间隔的多少倍）
+                if last_remind_time:
+                    not_drinking_minutes = (now_utc - last_remind_time).total_seconds() / 60
+                    gradient = int(not_drinking_minutes / interval_min)
+                    # 超过4倍的话，保持在4（使用最后的文案）
+                    gradient = min(gradient, 4)
+                else:
+                    gradient = 1  # 首次提醒
+                
+                # 选择对应梯度的提醒文案
+                reminder_text = GRADIENT_REMINDER_MESSAGES.get(gradient, GRADIENT_REMINDER_MESSAGES[4])
+                
                 # 获取今日进度
                 today_total = await db.get_today_total(user_id, user_data["timezone"])
                 daily_goal = user_data["daily_goal"]
@@ -145,7 +162,7 @@ async def create_reminder_job(user_id: int):
                 
                 # 构建提醒消息
                 message_text = (
-                    f"💧 <b>是时候喝水了！</b>\n\n"
+                    f"<b>{reminder_text}</b>\n\n"
                     f"📊 <b>今日进度</b>\n"
                     f"已喝: {today_total}ml / {daily_goal}ml ({progress_percent}%)\n"
                     f"还需: {max(0, daily_goal - today_total)}ml\n\n"
@@ -166,9 +183,20 @@ async def create_reminder_job(user_id: int):
                 logger.error(f"[提醒] 发送给用户 {user_id} 失败: {e}")
         
         # 注册定时任务（每 interval_min 分钟执行一次）
+        # 计算第一次执行的延迟时间（基于 last_remind_time）
+        last_remind_time = user.get("last_remind_time")
+        if last_remind_time:
+            # 从最后一次提醒/饮水时间开始计算
+            now_utc = datetime.utcnow()
+            elapsed_minutes = (now_utc - last_remind_time).total_seconds() / 60
+            delay_minutes = max(0, interval_min - elapsed_minutes)
+        else:
+            # 如果没有上次提醒时间，立即提醒
+            delay_minutes = 0
+        
         scheduler.add_job(
             send_reminder,
-            trigger=IntervalTrigger(minutes=interval_min if interval_min >= 1 else 1),
+            trigger=IntervalTrigger(minutes=interval_min if interval_min >= 1 else 1, start_date=datetime.utcnow() + timedelta(minutes=delay_minutes)),
             id=job_id,
             name=f"提醒_用户{user_id}",
             replace_existing=True,
@@ -213,8 +241,14 @@ async def create_daily_start_notification(user_id: int):
         if user.get("is_disabled", 0):
             return
         
-        start_time = user["start_time"]  # HH:MM 格式
+        start_time = user["start_time"]  # HH:MM 格式（用户本地时间）
         start_h, start_m = map(int, start_time.split(":"))
+        timezone = user["timezone"]
+        
+        # 转换用户本地时间到 UTC 时间
+        # 用户本地时间 08:00 在 UTC+8 时区对应 UTC 00:00
+        utc_h = (start_h - timezone) % 24
+        utc_m = start_m
         
         # 如果已存在同用户的开始通知 Job，先删除
         job_id = f"daily_start_{user_id}"
@@ -249,17 +283,17 @@ async def create_daily_start_notification(user_id: int):
             except Exception as e:
                 logger.error(f"[每日通知] 发送每日开始通知给用户 {user_id} 失败: {e}")
         
-        # 注册每日任务（每天在指定时间执行一次）
+        # 注册每日任务（基于 UTC 时间，每天在指定 UTC 时间执行一次）
         scheduler.add_job(
             send_start_notification,
-            trigger=CronTrigger(hour=start_h, minute=start_m),
+            trigger=CronTrigger(hour=utc_h, minute=utc_m),
             id=job_id,
             name=f"每日开始通知_用户{user_id}",
             replace_existing=True,
             misfire_grace_time=30
         )
         
-        logger.info(f"[调度] 为用户 {user_id} 创建每日开始通知 Job (时间 {start_time})")
+        logger.info(f"[调度] 为用户 {user_id} 创建每日开始通知 Job (用户本地时间 {start_time}, UTC 时间 {utc_h:02d}:{utc_m:02d})")
         
     except Exception as e:
         logger.error(f"[调度] 创建每日开始通知失败 (用户 {user_id}): {e}")
@@ -278,9 +312,14 @@ async def create_daily_end_report(user_id: int):
         if user.get("is_disabled", 0):
             return
         
-        end_time = user["end_time"]  # HH:MM 格式
+        end_time = user["end_time"]  # HH:MM 格式（用户本地时间）
         end_h, end_m = map(int, end_time.split(":"))
         timezone = user["timezone"]
+        
+        # 转换用户本地时间到 UTC 时间
+        # 用户本地时间 22:00 在 UTC+8 时区对应 UTC 14:00
+        utc_h = (end_h - timezone) % 24
+        utc_m = end_m
         
         # 如果已存在同用户的结束报告 Job，先删除
         job_id = f"daily_end_{user_id}"
@@ -342,17 +381,17 @@ async def create_daily_end_report(user_id: int):
             except Exception as e:
                 logger.error(f"[每日报告] 发送每日结束报告给用户 {user_id} 失败: {e}")
         
-        # 注册每日任务（每天在指定时间执行一次）
+        # 注册每日任务（基于 UTC 时间，每天在指定 UTC 时间执行一次）
         scheduler.add_job(
             send_end_report,
-            trigger=CronTrigger(hour=end_h, minute=end_m),
+            trigger=CronTrigger(hour=utc_h, minute=utc_m),
             id=job_id,
             name=f"每日结束报告_用户{user_id}",
             replace_existing=True,
             misfire_grace_time=30
         )
         
-        logger.info(f"[调度] 为用户 {user_id} 创建每日结束报告 Job (时间 {end_time})")
+        logger.info(f"[调度] 为用户 {user_id} 创建每日结束报告 Job (用户本地时间 {end_time}, UTC 时间 {utc_h:02d}:{utc_m:02d})")
         
     except Exception as e:
         logger.error(f"[调度] 创建每日结束报告失败 (用户 {user_id}): {e}")

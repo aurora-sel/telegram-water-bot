@@ -106,6 +106,14 @@ COMPLETION_MESSAGES = [
     "⭐ 太棒了！保持这个好习惯！"
 ]
 
+# 梯度提醒文案（根据未喝水时长的倍数）
+GRADIENT_REMINDER_MESSAGES = {
+    1: "💧 是时候喝水了！",
+    2: "💧 是时候喝水了！这么久没喝水你不口渴吗？",
+    3: "💧 是时候喝水了！眼睛都要干掉了！",
+    4: "💧 是时候喝水了！妹妹都干掉了！！"
+}
+
 # API 端点
 API_ENDPOINTS = {
     "get_me": "https://api.telegram.org/bot{token}/getMe",
