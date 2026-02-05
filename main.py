@@ -138,19 +138,25 @@ async def create_reminder_job(user_id: int):
                     logger.info(f"[提醒] 用户 {user_id} 不在活跃时段，跳过提醒")
                     return
                 
-                # 计算未喝水时间（基于上次提醒时间）
-                last_remind_time = user_data.get("last_remind_time")
+                # 检查是否在免打扰时段
+                is_quiet = await db.is_in_quiet_hours(user_id)
+                if is_quiet:
+                    logger.info(f"[提醒] 用户 {user_id} 在免打扰时段，跳过提醒")
+                    return
+                
+                # 计算未喝水时间（基于最后一次饮水记录时间）
+                last_record_time = await db.get_last_record_time(user_id)
                 interval_min = user_data["interval_min"]
                 now_utc = datetime.utcnow()
                 
                 # 确定梯度（未喝水时间是间隔的多少倍）
-                if last_remind_time:
-                    not_drinking_minutes = (now_utc - last_remind_time).total_seconds() / 60
+                if last_record_time:
+                    not_drinking_minutes = (now_utc - last_record_time).total_seconds() / 60
                     gradient = int(not_drinking_minutes / interval_min)
-                    # 确保梯度至少为1，最多为4
-                    gradient = max(1, min(gradient, 4))
+                    # 确保梯度至少为1
+                    gradient = max(1, gradient)
                 else:
-                    gradient = 1  # 首次提醒
+                    gradient = 1  # 首次提醒（没有喝水记录）
                 
                 # 获取提醒文案（从数据库查询自定义配置，如果没有则使用默认配置）
                 reminder_messages = await db.get_reminder_messages(user_id)
@@ -158,7 +164,10 @@ async def create_reminder_job(user_id: int):
                     reminder_messages = DEFAULT_GRADIENT_REMINDER_MESSAGES
                 
                 # 选择对应梯度的提醒文案
-                reminder_text = reminder_messages.get(gradient, reminder_messages.get(4, DEFAULT_REMINDER_MESSAGE))
+                # 如果用户设置了某个梯度，使用该梯度；否则使用该梯度的最大设置梯度
+                max_gradient = max(reminder_messages.keys()) if reminder_messages else 4
+                selected_gradient = min(gradient, max_gradient)
+                reminder_text = reminder_messages.get(selected_gradient, DEFAULT_REMINDER_MESSAGE)
                 
                 # 获取今日进度
                 today_total = await db.get_today_total(user_id, user_data["timezone"])
@@ -466,8 +475,15 @@ async def cmd_help(message: Message):
         "• /interval [数字] - 设置提醒间隔 (分钟，默认 60)\n"
         "• /timezone [数字] - 设置时区 (如 8 表示 UTC+8，默认 8)\n"
         "• /time [开始] [结束] - 设置活跃时段 (如: /time 08:00 22:00)\n\n"
+        "<b>� 免打扰（Do Not Disturb）</b>\n"
+        "• /quiet_hours - 查看当前免打扰时段\n"
+        "• /add_quiet_hour [开始] [结束] - 添加免打扰时段\n"
+        "  例如: /add_quiet_hour 12:00 14:00\n"
+        "• /remove_quiet_hour [开始] [结束] - 删除免打扰时段\n"
+        "• /clear_quiet_hours - 清空所有免打扰时段\n\n"
         "<b>📊 数据查询</b>\n"
         "• /stats - 查看今日进度、7日趋势和详细统计\n"
+        "• /user_info - 查看您的详细信息和今日饮水记录\n"
         "• /settings - 查看当前的所有个性化设置\n\n"
         "<b>🔔 提醒管理</b>\n"
         "• /stop_today - 停止今天的提醒\n"
@@ -1043,12 +1059,10 @@ async def cmd_admin_help(message: Message):
     
     help_text = (
         "🔑 <b>管理员命令列表</b>\n\n"
-        "<b>📊 统计与查询</b>\n"
-        "• /admin_stats - 查看全局统计数据\n"
-        "  显示总用户数、活跃用户数、黑名单用户数等\n\n"
-        "• /user_info [用户ID] - 查看用户详细信息\n"
-        "  例如: /user_info 123456789\n"
-        "  显示用户设置、今日进度、历史记录等\n\n"
+        "<b>� 用户沟通</b>\n"
+        "• /send_msg [用户ID] [消息] - 发送消息给用户\n"
+        "  例如: /send_msg 123456789 您好，这是来自管理员的消息\n"
+        "  直接向用户发送指向性对话消息\n\n"
         "<b>👥 用户管理</b>\n"
         "• /blacklist [用户ID] [原因] - 禁用用户账号\n"
         "  例如: /blacklist 123456789 垃圾消息\n"
@@ -1056,17 +1070,24 @@ async def cmd_admin_help(message: Message):
         "• /unblacklist [用户ID] - 取消禁用用户\n"
         "  例如: /unblacklist 123456789\n"
         "  用户将恢复使用权限\n\n"
+        "<b>📊 统计与查询</b>\n"
+        "• /user_info [用户ID] - 查看用户详细信息\n"
+        "  例如: /user_info 123456789\n"
+        "  显示用户设置、今日进度、历史记录等\n\n"
+        "• /admin_stats - 查看全局统计数据\n"
+        "  显示总用户数、活跃用户数、黑名单用户数等\n\n"
         "<b>🔔 梯度提醒配置</b>\n"
+        "• /show_reminders [用户ID] - 查看梯度提醒设置\n"
+        "  例如: /show_reminders 123456789\n"
+        "  显示用户的所有梯度文案和免打扰时段\n\n"
         "• /set_reminder_messages - 自定义梯度提醒文案\n"
         "  输入该命令开始交互式配置\n"
-        "  支持设置4个梯度的提醒文案\n\n"
+        "  支持设置 1-99 个梯度的提醒文案\n\n"
         "• /update_msg [梯度] [新文案] - 更新单个梯度\n"
         "  例如: /update_msg 1 该喝水了\n"
-        "  梯度: 1, 2, 3, 或 4\n\n"
+        "  梯度: 1-99 (可无限扩展)\n\n"
         "• /reset_reminder_messages - 重置为默认配置\n"
-        "  将所有梯度提醒文案恢复为默认值\n\n"
-        "<b>ℹ️ 其他</b>\n"
-        "• /admin_help - 显示此帮助信息"
+        "  将所有梯度提醒文案恢复为默认值"
     )
     
     await message.answer(help_text, parse_mode="HTML")
@@ -1096,6 +1117,9 @@ async def cmd_user_info(message: Message):
         stats = await db.get_stats(target_id)
         today_total = stats["today_total"]
         
+        # 获取今日记录
+        today_records = await db.get_today_records(target_id, user["timezone"])
+        
         # 获取用户黑名单状态
         is_blacklisted = await db.is_in_blacklist(target_id)
         
@@ -1110,8 +1134,20 @@ async def cmd_user_info(message: Message):
             f"黑名单状态: {'❌ 已拉黑' if is_blacklisted else '✅ 正常'}\n"
             f"今日饮水: {today_total} ml\n"
             f"账户创建: {user['created_at'].strftime('%Y-%m-%d %H:%M:%S')}\n"
-            f"最后交互: {user['last_interaction_time'].strftime('%Y-%m-%d %H:%M:%S')}"
+            f"最后交互: {user['last_interaction_time'].strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+            f"<b>📋 今日饮水记录</b>\n"
         )
+        
+        if today_records:
+            for record in today_records:
+                created_at = record['created_at']
+                # 转换为用户时区
+                user_local_time = created_at + timedelta(hours=user["timezone"])
+                amount = record['amount']
+                time_str = user_local_time.strftime('%H:%M:%S')
+                info_text += f"• {time_str} - {amount} ml\n"
+        else:
+            info_text += "• 暂无记录\n"
         
         await message.answer(info_text, parse_mode="HTML")
         logger.info(f"[管理] 管理员 {user_id} 查看了用户 {target_id} 的信息")
@@ -1139,15 +1175,24 @@ async def cmd_set_reminder_messages(message: Message, state: FSMContext):
     config_text = (
         "💬 <b>梯度提醒文案配置</b>\n\n"
         "当前配置：\n"
-        f"梯度 1 (X 分钟未喝水): <code>{current_messages[1]}</code>\n"
-        f"梯度 2 (2X 分钟未喝水): <code>{current_messages[2]}</code>\n"
-        f"梯度 3 (3X 分钟未喝水): <code>{current_messages[3]}</code>\n"
-        f"梯度 4+ (4X+ 分钟未喝水): <code>{current_messages[4]}</code>\n\n"
+    )
+    
+    # 显示所有已配置的梯度
+    for gradient in sorted(current_messages.keys()):
+        config_text += f"梯度 {gradient}: <code>{current_messages[gradient]}</code>\n"
+    
+    config_text += (
+        "\n<b>说明：</b>\n"
+        "• 梯度 N 对应：N 倍提醒间隔未喝水时触发\n"
+        "• 可设置 1-99 个梯度（足够应对大多数场景）\n"
+        "• 超出设置范围的梯度自动使用最高梯度文案\n\n"
         "<b>修改说明：</b>\n"
         "📝 请按以下格式发送修改指令：\n"
         "<code>/update_msg 梯度 新文案</code>\n\n"
         "例如修改梯度 1：\n"
-        "<code>/update_msg 1 💧 是时候喝水啦！</code>\n\n"
+        "<code>/update_msg 1 💧 该喝水了</code>\n\n"
+        "例如添加梯度 5：\n"
+        "<code>/update_msg 5 🚨 紧急：请立即喝水</code>\n\n"
         "例如重置为默认：\n"
         "<code>/reset_reminder_messages</code>"
     )
@@ -1171,7 +1216,7 @@ async def cmd_update_msg(message: Message):
     if len(parts) < 3:
         await message.answer(
             "用法: /update_msg [梯度] [新文案]\n"
-            "梯度: 1-4\n"
+            "梯度: 1-99 (可无限扩展)\n"
             "例如: /update_msg 1 💧 是时候喝水啦！"
         )
         return
@@ -1180,8 +1225,8 @@ async def cmd_update_msg(message: Message):
         gradient = int(parts[1])
         new_msg = parts[2]
         
-        if gradient < 1 or gradient > 4:
-            await message.answer("❌ 梯度必须是 1-4 之间的数字")
+        if gradient < 1 or gradient > 99:
+            await message.answer("❌ 梯度必须是 1-99 之间的数字")
             return
         
         # 获取当前配置
@@ -1230,6 +1275,282 @@ async def cmd_reset_reminder_messages(message: Message):
     
     await message.answer(default_text, parse_mode="HTML")
     logger.info(f"[提醒配置] 管理员 {user_id} 重置了梯度提醒文案")
+
+
+@dp.message(Command("quiet_hours"))
+async def cmd_quiet_hours(message: Message):
+    """查看当前免打扰时段"""
+    user_id = message.from_user.id
+    await db.update_last_interaction(user_id)
+    
+    quiet_hours = await db.get_quiet_hours(user_id)
+    
+    if not quiet_hours:
+        await message.answer(
+            "📪 您当前没有设置免打扰时段。\n\n"
+            "使用 <code>/add_quiet_hour HH:MM HH:MM</code> 添加免打扰时段\n"
+            "例如: <code>/add_quiet_hour 12:00 14:00</code>",
+            parse_mode="HTML"
+        )
+        return
+    
+    text = "📪 您的免打扰时段：\n\n"
+    for i, period in enumerate(quiet_hours, 1):
+        start = period.get("start", "N/A")
+        end = period.get("end", "N/A")
+        text += f"{i}. {start} - {end}\n"
+    
+    text += (
+        "\n💡 在免打扰时段内：\n"
+        "• ✅ 仍可正常记录喝水\n"
+        "• 🔕 不会收到喝水提醒\n"
+        "• ⏰ 时段结束后立即提醒\n\n"
+        "使用 <code>/remove_quiet_hour HH:MM HH:MM</code> 删除时段\n"
+        "使用 <code>/clear_quiet_hours</code> 清空所有时段"
+    )
+    
+    await message.answer(text, parse_mode="HTML")
+    logger.info(f"[免打扰] 用户 {user_id} 查看了免打扰时段")
+
+
+@dp.message(Command("add_quiet_hour"))
+async def cmd_add_quiet_hour(message: Message):
+    """添加免打扰时段"""
+    user_id = message.from_user.id
+    await db.update_last_interaction(user_id)
+    
+    args = message.text.split()
+    if len(args) != 3:
+        await message.answer(
+            "❌ 格式错误！\n\n"
+            "用法: <code>/add_quiet_hour HH:MM HH:MM</code>\n"
+            "例如: <code>/add_quiet_hour 12:00 14:00</code>",
+            parse_mode="HTML"
+        )
+        return
+    
+    start_time = args[1]
+    end_time = args[2]
+    
+    # 验证时间格式
+    try:
+        start_h, start_m = map(int, start_time.split(":"))
+        end_h, end_m = map(int, end_time.split(":"))
+        
+        if not (0 <= start_h < 24 and 0 <= start_m < 60 and
+                0 <= end_h < 24 and 0 <= end_m < 60):
+            raise ValueError("时间范围无效")
+        
+        # 比较时间
+        start_total = start_h * 60 + start_m
+        end_total = end_h * 60 + end_m
+        
+        if start_total >= end_total:
+            await message.answer(
+                "❌ 开始时间必须早于结束时间！\n"
+                f"您输入: {start_time} - {end_time}"
+            )
+            return
+    except (ValueError, IndexError):
+        await message.answer(
+            "❌ 时间格式错误！请使用 HH:MM 格式\n"
+            "例如: <code>/add_quiet_hour 12:00 14:00</code>",
+            parse_mode="HTML"
+        )
+        return
+    
+    success = await db.add_quiet_hour(user_id, start_time, end_time)
+    
+    if success:
+        await message.answer(
+            f"✅ 已添加免打扰时段: {start_time} - {end_time}\n\n"
+            "在此时段内将不接收喝水提醒，但仍可正常记录喝水。"
+        )
+        logger.info(f"[免打扰] 用户 {user_id} 添加了免打扰时段 {start_time}-{end_time}")
+    else:
+        await message.answer(
+            f"❌ 添加失败！该时段可能已存在或其他错误。"
+        )
+
+
+@dp.message(Command("remove_quiet_hour"))
+async def cmd_remove_quiet_hour(message: Message):
+    """删除免打扰时段"""
+    user_id = message.from_user.id
+    await db.update_last_interaction(user_id)
+    
+    args = message.text.split()
+    if len(args) != 3:
+        await message.answer(
+            "❌ 格式错误！\n\n"
+            "用法: <code>/remove_quiet_hour HH:MM HH:MM</code>\n"
+            "例如: <code>/remove_quiet_hour 12:00 14:00</code>",
+            parse_mode="HTML"
+        )
+        return
+    
+    start_time = args[1]
+    end_time = args[2]
+    
+    # 验证时间格式
+    try:
+        start_h, start_m = map(int, start_time.split(":"))
+        end_h, end_m = map(int, end_time.split(":"))
+        
+        if not (0 <= start_h < 24 and 0 <= start_m < 60 and
+                0 <= end_h < 24 and 0 <= end_m < 60):
+            raise ValueError("时间范围无效")
+    except (ValueError, IndexError):
+        await message.answer(
+            "❌ 时间格式错误！请使用 HH:MM 格式\n"
+            "例如: <code>/remove_quiet_hour 12:00 14:00</code>",
+            parse_mode="HTML"
+        )
+        return
+    
+    success = await db.remove_quiet_hour(user_id, start_time, end_time)
+    
+    if success:
+        await message.answer(
+            f"✅ 已删除免打扰时段: {start_time} - {end_time}"
+        )
+        logger.info(f"[免打扰] 用户 {user_id} 删除了免打扰时段 {start_time}-{end_time}")
+    else:
+        await message.answer(
+            f"❌ 删除失败！找不到该时段。"
+        )
+
+
+@dp.message(Command("clear_quiet_hours"))
+async def cmd_clear_quiet_hours(message: Message):
+    """清空所有免打扰时段"""
+    user_id = message.from_user.id
+    await db.update_last_interaction(user_id)
+    
+    await db.set_quiet_hours(user_id, [])
+    await message.answer(
+        "✅ 已清空所有免打扰时段。\n"
+        "现在将在任何时间接收喝水提醒。"
+    )
+    logger.info(f"[免打扰] 用户 {user_id} 清空了所有免打扰时段")
+
+
+@dp.message(Command("show_reminders"))
+async def cmd_show_reminders(message: Message):
+    """查看梯度提醒设置（管理员命令）"""
+    user_id = message.from_user.id
+    await db.update_last_interaction(user_id)
+    
+    if not is_admin(user_id):
+        await message.answer("❌ 您没有权限执行此命令。")
+        return
+    
+    args = message.text.split()
+    
+    # 如果指定了用户 ID，查看该用户的设置；否则查看自己的
+    if len(args) >= 2:
+        try:
+            target_id = int(args[1])
+        except ValueError:
+            await message.answer("❌ 用户 ID 必须是数字")
+            return
+    else:
+        target_id = user_id
+    
+    # 获取用户的梯度提醒设置
+    reminder_messages = await db.get_reminder_messages(target_id)
+    if not reminder_messages:
+        reminder_messages = DEFAULT_GRADIENT_REMINDER_MESSAGES
+    
+    # 获取用户的免打扰时段
+    quiet_hours = await db.get_quiet_hours(target_id)
+    
+    # 获取用户的其他设置
+    user_data = await db.get_or_create_user(target_id)
+    
+    # 构建显示文本
+    text = (
+        f"🔔 <b>用户 {target_id} 的梯度提醒设置</b>\n\n"
+        f"<b>⏰ 基础设置：</b>\n"
+        f"• 提醒间隔: {user_data['interval_min']} 分钟\n"
+        f"• 每日目标: {user_data['daily_goal']} ml\n"
+        f"• 活跃时段: {user_data['start_time']} ~ {user_data['end_time']}\n"
+        f"• 提醒状态: {'✅ 启用' if not user_data.get('is_disabled') else '❌ 禁用'}\n\n"
+        f"<b>📝 梯度提醒文案：</b>\n"
+    )
+    
+    # 列出所有梯度和对应的文案
+    for gradient in sorted(reminder_messages.keys()):
+        text += f"梯度 {gradient}: <code>{reminder_messages[gradient]}</code>\n"
+    
+    # 添加免打扰时段信息
+    text += f"\n<b>📪 免打扰时段：</b>\n"
+    if quiet_hours:
+        for i, period in enumerate(quiet_hours, 1):
+            start = period.get("start", "N/A")
+            end = period.get("end", "N/A")
+            text += f"{i}. {start} - {end}\n"
+    else:
+        text += "• 无（接收所有提醒）\n"
+    
+    # 添加说明
+    text += (
+        "\n<b>说明：</b>\n"
+        f"• 梯度 N = {user_data['interval_min']} × N 分钟未喝水\n"
+        "• 超出范围自动使用最高梯度\n"
+        "• 在免打扰时段内不发送提醒\n"
+        f"• 记录水量命令: <code>/record {target_id} 200</code>"
+    )
+    
+    await message.answer(text, parse_mode="HTML")
+    logger.info(f"[管理员] 用户 {user_id} 查看了用户 {target_id} 的梯度提醒设置")
+
+
+@dp.message(Command("send_msg"))
+async def cmd_send_msg(message: Message, state: FSMContext):
+    """发送消息给特定用户（指向性对话）"""
+    user_id = message.from_user.id
+    await db.update_last_interaction(user_id)
+    
+    if not is_admin(user_id):
+        await message.answer("❌ 您没有权限执行此命令。")
+        return
+    
+    args = message.text.split(maxsplit=2)
+    
+    if len(args) < 3:
+        await message.answer(
+            "用法: /send_msg [用户ID] [消息内容]\n"
+            "例如: /send_msg 123456789 您好，这是来自管理员的消息"
+        )
+        return
+    
+    try:
+        target_id = int(args[1])
+        msg_content = args[2]
+    except (ValueError, IndexError):
+        await message.answer("❌ 用户 ID 必须是数字")
+        return
+    
+    # 检查目标用户是否在黑名单
+    if await db.is_in_blacklist(target_id):
+        await message.answer(f"❌ 用户 {target_id} 已被禁用，无法发送消息。")
+        return
+    
+    try:
+        # 发送消息给目标用户
+        await bot.send_message(
+            chat_id=target_id,
+            text=f"📨 <b>管理员消息</b>\n\n{msg_content}",
+            parse_mode="HTML"
+        )
+        
+        # 确认消息
+        await message.answer(f"✅ 消息已发送给用户 {target_id}")
+        logger.info(f"[管理员] 用户 {user_id} 向用户 {target_id} 发送了消息")
+    except Exception as e:
+        await message.answer(f"❌ 发送失败: {str(e)}")
+        logger.error(f"[管理员] 向用户 {target_id} 发送消息失败: {e}")
 
 
 # 处理数字输入 - 记录饮水
@@ -1371,9 +1692,13 @@ async def on_startup():
     # 设置机器人命令菜单
     try:
         commands = [
-            # 记录饮水
+            # 核心功能（最重要）
             BotCommand(command="start", description="开始使用机器人"),
             BotCommand(command="help", description="查看所有可用命令"),
+            
+            # 记录饮水
+            BotCommand(command="back", description="补录之前的饮水"),
+            BotCommand(command="stats", description="查看饮水进度和统计"),
             
             # 个性化配置
             BotCommand(command="goal", description="设置每日饮水目标"),
@@ -1381,8 +1706,14 @@ async def on_startup():
             BotCommand(command="timezone", description="设置时区"),
             BotCommand(command="time", description="设置活跃时段"),
             
+            # 免打扰时段
+            BotCommand(command="quiet_hours", description="查看免打扰时段"),
+            BotCommand(command="add_quiet_hour", description="添加免打扰时段"),
+            BotCommand(command="remove_quiet_hour", description="删除免打扰时段"),
+            BotCommand(command="clear_quiet_hours", description="清空免打扰时段"),
+            
             # 数据查询
-            BotCommand(command="stats", description="查看饮水进度和统计"),
+            BotCommand(command="user_info", description="查看个人信息"),
             BotCommand(command="settings", description="查看当前设置"),
             
             # 提醒管理
@@ -1392,10 +1723,11 @@ async def on_startup():
             
             # 数据管理
             BotCommand(command="reset", description="重置所有饮水记录"),
-            BotCommand(command="back", description="补录之前的饮水"),
             
-            # 管理员
+            # 管理员命令
             BotCommand(command="admin_help", description="管理员专用命令"),
+            BotCommand(command="send_msg", description="[管理员] 给用户发送消息"),
+            BotCommand(command="show_reminders", description="[管理员] 查看梯度提醒"),
         ]
         await bot.set_my_commands(commands)
         logger.info("[启动] ✅ 机器人命令菜单已设置")

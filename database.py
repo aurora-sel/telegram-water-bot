@@ -6,6 +6,7 @@
 import os
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
+import json
 from sqlalchemy import create_engine, Column, Integer, String, DateTime, Float, ForeignKey, desc
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
@@ -227,6 +228,60 @@ class DatabaseManager:
                 print("[DB] ✅ is_disabled 列已添加")
         except Exception as e:
             print(f"[DB] ⚠️  迁移 is_disabled 列失败: {e}")
+        
+        # 为 users 表添加 quiet_hours 列（免打扰时段，JSON 格式）
+        try:
+            result = await conn.fetchval("""
+                SELECT EXISTS (
+                    SELECT 1 FROM information_schema.columns 
+                    WHERE table_name = 'users' AND column_name = 'quiet_hours'
+                )
+            """)
+            
+            if not result:
+                print("[DB] 迁移: 添加 quiet_hours 列...")
+                await conn.execute("""
+                    ALTER TABLE users 
+                    ADD COLUMN quiet_hours TEXT DEFAULT '[]'
+                """)
+                print("[DB] ✅ quiet_hours 列已添加")
+        except Exception as e:
+            print(f"[DB] ⚠️  迁移 quiet_hours 列失败: {e}")
+        
+        # 为 reminder_messages 表添加更多梯度列（gradient_5 到 gradient_99）
+        try:
+            # 检查 reminder_messages 表是否存在
+            table_exists = await conn.fetchval("""
+                SELECT EXISTS (
+                    SELECT 1 FROM information_schema.tables 
+                    WHERE table_name = 'reminder_messages'
+                )
+            """)
+            
+            if table_exists:
+                # 添加梯度 5-99
+                for i in range(5, 100):
+                    column_name = f"gradient_{i}"
+                    result = await conn.fetchval(f"""
+                        SELECT EXISTS (
+                            SELECT 1 FROM information_schema.columns 
+                            WHERE table_name = 'reminder_messages' AND column_name = '{column_name}'
+                        )
+                    """)
+                    
+                    if not result:
+                        try:
+                            await conn.execute(f"""
+                                ALTER TABLE reminder_messages 
+                                ADD COLUMN {column_name} VARCHAR(255)
+                            """)
+                            print(f"[DB] ✅ {column_name} 列已添加")
+                        except Exception as e:
+                            print(f"[DB] ⚠️  添加 {column_name} 列失败: {e}")
+                            break  # 如果有一个失败，后面的可能都会失败
+        except Exception as e:
+            print(f"[DB] ⚠️  迁移 reminder_messages 梯度列失败: {e}")
+
     
     async def close(self):
         """关闭数据库连接池"""
@@ -492,37 +547,45 @@ class DatabaseManager:
         """获取用户自定义的梯度提醒文案"""
         async with self.pool.acquire() as conn:
             result = await conn.fetchrow(
-                "SELECT gradient_1, gradient_2, gradient_3, gradient_4 FROM reminder_messages WHERE user_id = $1",
+                "SELECT * FROM reminder_messages WHERE user_id = $1",
                 user_id
             )
             if result:
-                return {
-                    1: result['gradient_1'],
-                    2: result['gradient_2'],
-                    3: result['gradient_3'],
-                    4: result['gradient_4']
-                }
+                messages = {}
+                # 遍历所有可能的梯度列（gradient_1 到 gradient_99）
+                for i in range(1, 100):
+                    column_name = f'gradient_{i}'
+                    if column_name in result and result[column_name]:
+                        messages[i] = result[column_name]
+                    elif i > 1 and i - 1 in messages:
+                        # 如果某个梯度为空，但前一个梯度有值，继续检查
+                        continue
+                    else:
+                        # 如果梯度为空且前面没有设置，停止
+                        break
+                return messages if messages else None
             return None
     
     async def set_reminder_messages(self, user_id: int, messages: Dict[int, str]) -> bool:
         """设置用户自定义的梯度提醒文案"""
         async with self.pool.acquire() as conn:
+            # 首先确保记录存在
             await conn.execute("""
-                INSERT INTO reminder_messages (user_id, gradient_1, gradient_2, gradient_3, gradient_4, updated_at)
-                VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)
-                ON CONFLICT (user_id) DO UPDATE SET
-                    gradient_1 = $2,
-                    gradient_2 = $3,
-                    gradient_3 = $4,
-                    gradient_4 = $5,
-                    updated_at = CURRENT_TIMESTAMP
-            """,
-            user_id,
-            messages.get(1, ""),
-            messages.get(2, ""),
-            messages.get(3, ""),
-            messages.get(4, "")
-            )
+                INSERT INTO reminder_messages (user_id, updated_at)
+                VALUES ($1, CURRENT_TIMESTAMP)
+                ON CONFLICT (user_id) DO UPDATE SET updated_at = CURRENT_TIMESTAMP
+            """, user_id)
+            
+            # 然后更新所有梯度
+            for gradient, text in messages.items():
+                column_name = f"gradient_{gradient}"
+                # 动态构建 UPDATE 语句
+                await conn.execute(f"""
+                    UPDATE reminder_messages
+                    SET {column_name} = $1, updated_at = CURRENT_TIMESTAMP
+                    WHERE user_id = $2
+                """, text, user_id)
+            
             return True
     
     async def reset_reminder_messages(self, user_id: int) -> bool:
@@ -533,6 +596,96 @@ class DatabaseManager:
                 user_id
             )
             return True
+
+    async def get_quiet_hours(self, user_id: int) -> list:
+        """获取用户的免打扰时段列表"""
+        async with self.pool.acquire() as conn:
+            result = await conn.fetchval(
+                "SELECT quiet_hours FROM users WHERE user_id = $1",
+                user_id
+            )
+            if result:
+                try:
+                    return json.loads(result)
+                except (json.JSONDecodeError, TypeError):
+                    return []
+            return []
+
+    async def set_quiet_hours(self, user_id: int, hours: list) -> bool:
+        """设置用户的免打扰时段（覆盖原有）"""
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE users SET quiet_hours = $1 WHERE user_id = $2",
+                json.dumps(hours),
+                user_id
+            )
+            return True
+
+    async def add_quiet_hour(self, user_id: int, start_time: str, end_time: str) -> bool:
+        """添加一个免打扰时段"""
+        try:
+            quiet_hours = await self.get_quiet_hours(user_id)
+            # 检查是否已存在相同时段
+            for period in quiet_hours:
+                if period.get("start") == start_time and period.get("end") == end_time:
+                    return False  # 时段已存在
+            # 添加新时段
+            quiet_hours.append({"start": start_time, "end": end_time})
+            # 按开始时间排序
+            quiet_hours.sort(key=lambda x: x["start"])
+            return await self.set_quiet_hours(user_id, quiet_hours)
+        except Exception as e:
+            logger.error(f"添加免打扰时段失败: {e}")
+            return False
+
+    async def remove_quiet_hour(self, user_id: int, start_time: str, end_time: str) -> bool:
+        """删除一个免打扰时段"""
+        try:
+            quiet_hours = await self.get_quiet_hours(user_id)
+            # 移除指定时段
+            quiet_hours = [
+                period for period in quiet_hours
+                if not (period.get("start") == start_time and period.get("end") == end_time)
+            ]
+            return await self.set_quiet_hours(user_id, quiet_hours)
+        except Exception as e:
+            logger.error(f"删除免打扰时段失败: {e}")
+            return False
+
+    async def is_in_quiet_hours(self, user_id: int) -> bool:
+        """检查当前时间是否在用户的免打扰时段内"""
+        try:
+            quiet_hours = await self.get_quiet_hours(user_id)
+            if not quiet_hours:
+                return False
+            
+            # 获取用户时区（如果有）
+            async with self.pool.acquire() as conn:
+                tz_str = await conn.fetchval(
+                    "SELECT timezone FROM users WHERE user_id = $1",
+                    user_id
+                )
+            
+            # 使用用户时区或默认时区
+            if tz_str:
+                try:
+                    tz = pytz.timezone(tz_str)
+                except:
+                    tz = pytz.UTC
+            else:
+                tz = pytz.UTC
+            
+            now = datetime.now(tz).strftime("%H:%M")
+            
+            for period in quiet_hours:
+                start = period.get("start", "")
+                end = period.get("end", "")
+                if start <= now <= end:
+                    return True
+            return False
+        except Exception as e:
+            logger.error(f"检查免打扰时段失败: {e}")
+            return False
 
 # 全局数据库实例
 db = DatabaseManager()
