@@ -533,3 +533,6 @@ class DatabaseManager:
                 user_id
             )
             return True
+
+# 全局数据库实例
+db = Database()
