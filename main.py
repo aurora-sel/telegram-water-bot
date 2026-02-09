@@ -854,7 +854,7 @@ async def cmd_stop_today(message: Message):
         active_jobs.pop(user_id, None)
         
         # 计算明天的恢复时间（明天的开始时间）
-        user = await db.get_user(user_id)
+        user = await db.get_or_create_user(user_id)
         if user:
             start_h, start_m = map(int, user['start_time'].split(":"))
             now = datetime.utcnow()
